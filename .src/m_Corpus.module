@@ -1,0 +1,485 @@
+' Gambas module file
+
+' ============================================
+' Módulo    : m_Corpus
+' Propósito : Dueño del estado del corpus y de todo el acceso a las
+'             tablas familias y entradas. Los formularios no consultan
+'             la base: le piden datos a este módulo.
+' ============================================
+
+' --- ESTADO DE SESIÓN (RC-GM-16: NUNCA EN CONTROLES DE UI) ---
+Public CodigoEnCurso As String
+Public PrefijoEnCurso As String
+
+' --- MAPEOS ÍNDICE DE CONTROL -> DATO, PARA LOS LISTBOX Y EL COMBO ---
+Private $aPrefijos As New String[]
+Private $aCodigos As New String[]
+
+' --- TOKENS DE LOS FILTROS ANALÍTICOS ---
+' NO SON FAMILIAS: SON PREGUNTAS SOBRE EL CORPUS COMPLETO.
+' EL PREFIJO @ LOS DISTINGUE DE CUALQUIER PREFIJO DE FAMILIA POSIBLE.
+Public Const FILTRO_TODAS As String = ""
+Public Const FILTRO_PENDIENTES As String = "@pendientes"
+Public Const FILTRO_SIN_VERIFICAR As String = "@sinverificar"
+Public Const FILTRO_NO_VIGENTES As String = "@novigentes"
+
+' ============================================
+' Función   : CargarFiltros
+' Propósito : Arma las opciones del combo. Las tres primeras son filtros
+'             analíticos sobre el corpus entero; el resto, familias.
+' Parámetros: ninguno
+' Retorna   : String[] — etiquetas listas para el ComboBox
+' ============================================
+Public Function CargarFiltros() As String[]
+
+  Dim aEtiquetas As New String[]
+  Dim rFamilias As Result
+
+  ' --- 1. REINICIO DEL MAPEO ---
+  $aPrefijos = New String[]
+
+  ' --- 2. FILTROS ANALÍTICOS, ANTES QUE LAS FAMILIAS ---
+  $aPrefijos.Add(FILTRO_TODAS)
+  aEtiquetas.Add("(todo el corpus)")
+
+  $aPrefijos.Add(FILTRO_PENDIENTES)
+  aEtiquetas.Add("(con pendientes)")
+
+  $aPrefijos.Add(FILTRO_SIN_VERIFICAR)
+  aEtiquetas.Add("(sin verificar)")
+
+  $aPrefijos.Add(FILTRO_NO_VIGENTES)
+  aEtiquetas.Add("(no vigentes)")
+
+  ' --- 3. FAMILIAS EN EL ORDEN DE EXPORTACIÓN ---
+  Try rFamilias = m_Base.hConn.Exec("SELECT prefijo, nombre FROM familias ORDER BY orden")
+  If Error Then
+    Message.Error("No se pudieron leer las familias." & Chr(10) & Error.Text)
+    Return aEtiquetas
+  Endif
+
+  While rFamilias.Available
+    $aPrefijos.Add(rFamilias["prefijo"])
+    aEtiquetas.Add(rFamilias["prefijo"] & " — " & rFamilias["nombre"])
+    rFamilias.MoveNext
+  Wend
+
+  Return aEtiquetas
+
+End
+
+' ============================================
+' Función   : FiltroDeIndice
+' Propósito : Traduce el índice del combo al filtro correspondiente:
+'             un prefijo de familia o un token analítico.
+' Parámetros: iIndice As Integer — índice seleccionado en el combo
+' Retorna   : String — filtro, o cadena vacía para todo el corpus
+' ============================================
+Public Function FiltroDeIndice(iIndice As Integer) As String
+
+  ' --- 1. GUARDA DE RANGO ---
+  If iIndice < 0 Then Return FILTRO_TODAS
+  If iIndice >= $aPrefijos.Count Then Return FILTRO_TODAS
+
+  Return $aPrefijos[iIndice]
+
+End
+
+' ============================================
+' Función   : CargarEntradas
+' Propósito : Arma las líneas del ListBox principal y guarda el mapeo
+'             índice -> código.
+' Parámetros: sPrefijo As String — familia a filtrar; vacío = todas
+' Retorna   : String[] — líneas listas para el ListBox
+' ============================================
+Public Function CargarEntradas(sPrefijo As String) As String[]
+
+  Dim aLineas As New String[]
+  Dim rEntradas As Result
+  Dim sLinea As String
+  Dim sEstado As String
+
+  ' --- 1. REINICIO DEL MAPEO ---
+  $aCodigos = New String[]
+
+  ' --- 2. CONSULTA SEGÚN EL FILTRO ELEGIDO ---
+  ' TODAS LAS VARIANTES COMPARTEN EL MISMO ORDEN: FAMILIA Y LUEGO ORDEN
+  ' INTERNO, QUE ES EL DE LA EXPORTACIÓN A MARKDOWN.
+  ' LAS COMPARACIONES VAN POR IGUALDAD Y NO CON Begins, PORQUE Not LIGA
+  ' ANTES QUE Begins Y OBLIGA A SEPARAR (GV-12)
+  If sPrefijo = FILTRO_PENDIENTES Then
+
+    Try rEntradas = m_Base.hConn.Exec(
+      "SELECT e.codigo, e.titulo, e.estado FROM entradas e " &
+      "JOIN familias f ON f.prefijo = e.prefijo " &
+      "WHERE e.pendiente IS NOT NULL ORDER BY f.orden, e.orden")
+
+  Else If sPrefijo = FILTRO_SIN_VERIFICAR Then
+
+    ' SIN EVIDENCIA REGISTRADA, O EVIDENCIA APENAS INFERIDA
+    Try rEntradas = m_Base.hConn.Exec(
+      "SELECT e.codigo, e.titulo, e.estado FROM entradas e " &
+      "JOIN familias f ON f.prefijo = e.prefijo " &
+      "WHERE e.evidencia IS NULL OR e.evidencia = 'inferida' " &
+      "ORDER BY f.orden, e.orden")
+
+  Else If sPrefijo = FILTRO_NO_VIGENTES Then
+
+    Try rEntradas = m_Base.hConn.Exec(
+      "SELECT e.codigo, e.titulo, e.estado FROM entradas e " &
+      "JOIN familias f ON f.prefijo = e.prefijo " &
+      "WHERE e.estado <> 'vigente' ORDER BY f.orden, e.orden")
+
+  Else If sPrefijo = FILTRO_TODAS Then
+
+    Try rEntradas = m_Base.hConn.Exec(
+      "SELECT e.codigo, e.titulo, e.estado FROM entradas e " &
+      "JOIN familias f ON f.prefijo = e.prefijo " &
+      "ORDER BY f.orden, e.orden")
+  Else
+    Try rEntradas = m_Base.hConn.Exec(
+      "SELECT e.codigo, e.titulo, e.estado FROM entradas e " &
+      "WHERE e.prefijo = &1 ORDER BY e.orden", sPrefijo)
+  Endif
+
+  If Error Then
+    Message.Error("No se pudieron leer las entradas." & Chr(10) & Error.Text)
+    Return aLineas
+  Endif
+
+  ' --- 3. ARMADO DE LÍNEAS: EL ESTADO SE MARCA SOLO SI NO ES VIGENTE ---
+  While rEntradas.Available
+    sEstado = rEntradas["estado"]
+    sLinea = rEntradas["codigo"] & " — " & rEntradas["titulo"]
+    If sEstado <> "vigente" Then sLinea = "(" & sEstado & ") " & sLinea
+    aLineas.Add(sLinea)
+    $aCodigos.Add(rEntradas["codigo"])
+    rEntradas.MoveNext
+  Wend
+
+  Return aLineas
+
+End
+
+' ============================================
+' Función   : CodigoDeIndice
+' Propósito : Traduce el índice del ListBox principal a código de entrada
+' Parámetros: iIndice As Integer — índice seleccionado
+' Retorna   : String — código, o cadena vacía si el índice no es válido
+' ============================================
+Public Function CodigoDeIndice(iIndice As Integer) As String
+
+  ' --- 1. GUARDA DE RANGO ---
+  If iIndice < 0 Then Return ""
+  If iIndice >= $aCodigos.Count Then Return ""
+
+  Return $aCodigos[iIndice]
+
+End
+
+' ============================================
+' Función   : IndiceDeCodigo
+' Propósito : Operación inversa, necesaria para el salto por relaciones
+'             y para el botón Volver.
+' Parámetros: sCodigo As String — código buscado
+' Retorna   : Integer — índice en la lista actual, o -1 si no está
+' ============================================
+Public Function IndiceDeCodigo(sCodigo As String) As Integer
+
+  Return $aCodigos.Find(sCodigo)
+
+End
+
+' ============================================
+' Función   : LeerEntrada
+' Propósito : Trae una entrada completa desde la base
+' Parámetros: sCodigo As String — código de la entrada
+' Retorna   : CEntrada — objeto poblado, o Null si no existe
+' ============================================
+Public Function LeerEntrada(sCodigo As String) As CEntrada
+
+  Dim rEntrada As Result
+  Dim oEntrada As CEntrada
+
+  ' --- 1. VALIDACIÓN DE ENTRADA ---
+  If sCodigo = "" Then Return Null
+
+  ' --- 2. CONSULTA ---
+  Try rEntrada = m_Base.hConn.Exec("SELECT * FROM entradas WHERE codigo = &1", sCodigo)
+  If Error Then
+    Message.Error("No se pudo leer la entrada " & sCodigo & Chr(10) & Error.Text)
+    Return Null
+  Endif
+
+  If Not rEntrada.Available Then Return Null
+
+  ' --- 3. TRASVASE A OBJETO: LA UI NO DEBE VER UN Result ---
+  oEntrada = New CEntrada
+  oEntrada.iId = rEntrada["id_entrada"]
+  oEntrada.sPrefijo = rEntrada["prefijo"]
+  oEntrada.iNumero = rEntrada["numero"]
+  oEntrada.sCodigo = rEntrada["codigo"]
+  oEntrada.sTitulo = rEntrada["titulo"]
+  oEntrada.sCuerpo = rEntrada["cuerpo"]
+  oEntrada.sEstado = rEntrada["estado"]
+  oEntrada.sRelaciones = rEntrada["relaciones"]
+  oEntrada.iOrden = rEntrada["orden"]
+
+  ' --- 4. CAMPOS NULEABLES: If ANIDADO PORQUE And NO CORTOCIRCUITA (RC-GM-17) ---
+  oEntrada.sEvidencia = ""
+  If Not IsNull(rEntrada["evidencia"]) Then
+    oEntrada.sEvidencia = rEntrada["evidencia"]
+  Endif
+
+  oEntrada.sEntorno = ""
+  If Not IsNull(rEntrada["entorno"]) Then
+    oEntrada.sEntorno = rEntrada["entorno"]
+  Endif
+
+  oEntrada.sFechaVerificacion = ""
+  If Not IsNull(rEntrada["fecha_verificacion"]) Then
+    oEntrada.sFechaVerificacion = rEntrada["fecha_verificacion"]
+  Endif
+
+  oEntrada.sPendiente = ""
+  If Not IsNull(rEntrada["pendiente"]) Then
+    oEntrada.sPendiente = rEntrada["pendiente"]
+  Endif
+
+  Return oEntrada
+
+End
+
+' ============================================
+' Función   : GuardarEntrada
+' Propósito : Persiste los cambios de una entrada existente.
+'             Patrón Edit + Update obligatorio: son más de nueve campos
+'             y el parser de placeholders rompe con &10 (RC-GM-15).
+' Parámetros: oEntrada As CEntrada — objeto con los valores nuevos
+' Retorna   : Boolean — True si el UPDATE se aplicó
+' ============================================
+Public Function GuardarEntrada(oEntrada As CEntrada) As Boolean
+
+  Dim rEdicion As Result
+
+  ' --- 1. VALIDACIÓN DE ENTRADA ---
+  If IsNull(oEntrada) Then Return False
+  If oEntrada.iId <= 0 Then Return False
+
+  ' --- 2. APERTURA DEL REGISTRO EN MODO EDICIÓN ---
+  Try rEdicion = m_Base.hConn.Edit("entradas", "id_entrada = &1", oEntrada.iId)
+  If Error Then
+    Message.Error("No se pudo abrir la entrada para edición." & Chr(10) & Error.Text)
+    Return False
+  Endif
+
+  ' --- 3. ASIGNACIÓN POR NOMBRE, SIN LÍMITE DE CANTIDAD DE CAMPOS ---
+  With rEdicion
+    !titulo = oEntrada.sTitulo
+    !cuerpo = oEntrada.sCuerpo
+    !estado = oEntrada.sEstado
+    !evidencia = NuloSiVacio(oEntrada.sEvidencia)
+    !entorno = NuloSiVacio(oEntrada.sEntorno)
+    !fecha_verificacion = NuloSiVacio(oEntrada.sFechaVerificacion)
+    !relaciones = oEntrada.sRelaciones
+    !pendiente = NuloSiVacio(oEntrada.sPendiente)
+    !fecha_modificacion = Format$(Now, "yyyy-mm-dd hh:nn:ss")
+  End With
+
+  ' --- 4. ESCRITURA ---
+  Try rEdicion.Update()
+  If Error Then
+    Message.Error("No se pudo guardar la entrada." & Chr(10) & Error.Text)
+    Return False
+  Endif
+
+  Return True
+
+End
+
+' ============================================
+' Función   : CrearEntrada
+' Propósito : Da de alta una entrada nueva en una familia, calculando
+'             número, código y orden. El número sale del MÁXIMO ya usado
+'             y no de un conteo (RC-GM-09).
+' Parámetros: sPrefijo As String — familia de destino
+'             sTitulo As String — título inicial
+' Retorna   : String — código de la entrada creada, o vacío si falló
+' ============================================
+Public Function CrearEntrada(sPrefijo As String, sTitulo As String) As String
+
+  Dim rMaximos As Result
+  Dim rNueva As Result
+  Dim iNumero As Integer
+  Dim iOrden As Integer
+  Dim sCodigo As String
+  Dim sAhora As String
+
+  ' --- 1. VALIDACIÓN DE ENTRADA ---
+  If sPrefijo = "" Then Return ""
+  If Trim$(sTitulo) = "" Then Return ""
+
+  ' --- 2. SIGUIENTE NÚMERO Y SIGUIENTE ORDEN DENTRO DE LA FAMILIA ---
+  Try rMaximos = m_Base.hConn.Exec(
+    "SELECT MAX(numero) AS max_num, MAX(orden) AS max_ord " &
+    "FROM entradas WHERE prefijo = &1", sPrefijo)
+  If Error Then
+    Message.Error("No se pudo calcular el número de la entrada nueva." & Chr(10) & Error.Text)
+    Return ""
+  Endif
+
+  iNumero = 1
+  iOrden = 10
+  If rMaximos.Available Then
+    If Not IsNull(rMaximos["max_num"]) Then iNumero = CInt(rMaximos["max_num"]) + 1
+    If Not IsNull(rMaximos["max_ord"]) Then iOrden = CInt(rMaximos["max_ord"]) + 10
+  Endif
+
+  ' --- 3. CÓDIGO MATERIALIZADO: SOLO LO ESCRIBE ESTE MÓDULO ---
+  sCodigo = ArmarCodigo(sPrefijo, iNumero)
+  If sCodigo = "" Then Return ""
+
+  ' --- 4. ALTA ---
+  sAhora = Format$(Now, "yyyy-mm-dd hh:nn:ss")
+
+  Try rNueva = m_Base.hConn.Create("entradas")
+  If Error Then
+    Message.Error("No se pudo preparar el alta." & Chr(10) & Error.Text)
+    Return ""
+  Endif
+
+  With rNueva
+    !prefijo = sPrefijo
+    !numero = iNumero
+    !codigo = sCodigo
+    !titulo = sTitulo
+    !cuerpo = ""
+    !estado = "vigente"
+    !relaciones = ""
+    !orden = iOrden
+    !fecha_alta = sAhora
+    !fecha_modificacion = sAhora
+  End With
+
+  Try rNueva.Update()
+  If Error Then
+    Message.Error("No se pudo dar de alta la entrada." & Chr(10) & Error.Text)
+    Return ""
+  Endif
+
+  Return sCodigo
+
+End
+
+' ============================================
+' Función   : EliminarEntrada
+' Propósito : Borra una entrada por código
+' Parámetros: sCodigo As String — código de la entrada
+' Retorna   : Boolean — True si el borrado se ejecutó
+' ============================================
+Public Function EliminarEntrada(sCodigo As String) As Boolean
+
+  ' --- 1. VALIDACIÓN DE ENTRADA ---
+  If sCodigo = "" Then Return False
+
+  ' --- 2. BORRADO CON PLACEHOLDER, NUNCA CONCATENANDO SQL ---
+  Try m_Base.hConn.Exec("DELETE FROM entradas WHERE codigo = &1", sCodigo)
+  If Error Then
+    Message.Error("No se pudo eliminar la entrada." & Chr(10) & Error.Text)
+    Return False
+  Endif
+
+  Return True
+
+End
+
+' ============================================
+' Función   : ExisteCodigo
+' Propósito : Verifica si un código está dado de alta. Lo usa la
+'             validación de relaciones para no dejar vínculos muertos.
+' Parámetros: sCodigo As String — código a verificar
+' Retorna   : Boolean — True si existe
+' ============================================
+Public Function ExisteCodigo(sCodigo As String) As Boolean
+
+  Dim rExiste As Result
+
+  ' --- 1. VALIDACIÓN DE ENTRADA ---
+  If sCodigo = "" Then Return False
+
+  ' --- 2. CONSULTA ---
+  Try rExiste = m_Base.hConn.Exec("SELECT 1 FROM entradas WHERE codigo = &1", sCodigo)
+  If Error Then Return False
+
+  Return rExiste.Available
+
+End
+
+' ============================================
+' Función   : TituloDeCodigo
+' Propósito : Devuelve el título de una entrada, para armar las
+'             etiquetas de las relaciones.
+' Parámetros: sCodigo As String — código de la entrada
+' Retorna   : String — título, o cadena vacía si no existe
+' ============================================
+Public Function TituloDeCodigo(sCodigo As String) As String
+
+  Dim rTitulo As Result
+
+  ' --- 1. VALIDACIÓN DE ENTRADA ---
+  If sCodigo = "" Then Return ""
+
+  ' --- 2. CONSULTA ---
+  Try rTitulo = m_Base.hConn.Exec("SELECT titulo FROM entradas WHERE codigo = &1", sCodigo)
+  If Error Then Return ""
+  If Not rTitulo.Available Then Return ""
+
+  Return rTitulo["titulo"]
+
+End
+
+' ============================================
+' Función   : ArmarCodigo
+' Propósito : Construye el código a partir del prefijo y el número,
+'             respetando el ancho definido para la familia.
+' Parámetros: sPrefijo As String — prefijo de familia
+'             iNumero As Integer — número dentro de la familia
+' Retorna   : String — código armado, o vacío si la familia no existe
+' ============================================
+Public Function ArmarCodigo(sPrefijo As String, iNumero As Integer) As String
+
+  Dim rFamilia As Result
+  Dim iAncho As Integer
+  Dim sNumero As String
+
+  ' --- 1. ANCHO DEL NÚMERO, DEFINIDO POR FAMILIA ---
+  Try rFamilia = m_Base.hConn.Exec("SELECT ancho_numero FROM familias WHERE prefijo = &1", sPrefijo)
+  If Error Then Return ""
+  If Not rFamilia.Available Then Return ""
+
+  iAncho = rFamilia["ancho_numero"]
+  If iAncho < 1 Then iAncho = 1
+
+  ' --- 2. RELLENO CON CEROS A LA IZQUIERDA ---
+  sNumero = CStr(iNumero)
+  While String.Len(sNumero) < iAncho
+    sNumero = "0" & sNumero
+  Wend
+
+  Return sPrefijo & "-" & sNumero
+
+End
+
+' ============================================
+' Función   : NuloSiVacio
+' Propósito : Convierte cadena vacía en NULL para los campos opcionales,
+'             de modo que la base distinga "sin dato" de "dato vacío".
+' Parámetros: sValor As String — valor de la UI
+' Retorna   : Variant — el valor, o Null si estaba vacío
+' ============================================
+Private Function NuloSiVacio(sValor As String) As Variant
+
+  If Trim$(sValor) = "" Then Return Null
+  Return sValor
+
+End

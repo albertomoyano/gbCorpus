@@ -1,0 +1,204 @@
+# Gambas Form File 3.0
+
+{ Form Form
+  MoveScaled(0,0,190,76)
+  Expand = True
+  Text = ("Corpus normativo")
+  Maximized = True
+  Arrangement = Arrange.Horizontal
+  Spacing = True
+  Margin = True
+  Padding = 4
+  { mnuCorpus Menu
+    Text = ("Corpus")
+    { mnuExpDocumental Menu
+      Text = ("Exportar corpus completo (.md)")
+    }
+    { mnuExpOperativo Menu
+      Text = ("Exportar reglas vigentes (.md)")
+    }
+    { mnuExpVolcado Menu
+      Text = ("Exportar volcado SQL")
+    }
+    { mnuSep1 Menu
+    }
+    { mnuUbicacion Menu
+      Text = ("Ubicación de la base")
+    }
+  }
+  { hspPrincipal Splitter
+    MoveScaled(1,1,190,69)
+    Expand = True
+    Border = False
+    { vbxIzquierda VBox
+      MoveScaled(1,6,44,62)
+      Expand = True
+      Spacing = True
+      Margin = True
+      Padding = 4
+      { cmbFamilia ComboBox
+        MoveScaled(6,3,29,4)
+        ToolTip = ("Filtrar el corpus por familia")
+        ReadOnly = True
+      }
+      { lstEntradas ListBox
+        MoveScaled(5,9,28,17)
+        Font = Font["Noto Mono"]
+        Expand = True
+      }
+      { lblRelaciones Label
+        MoveScaled(6,30,30,4)
+        Text = ("Relaciones de la entrada")
+      }
+      { lstRelaciones ListBox
+        MoveScaled(5,36,38,18)
+        Font = Font["Noto Mono"]
+        ToolTip = ("→ declaradas por esta entrada · ← entradas que la apuntan")
+        Expand = True
+      }
+      { btnAtras Button
+        MoveScaled(4,57,16,4)
+        Text = ("Volver")
+        Picture = Picture["iconos/undo.png"]
+      }
+    }
+    { vbxDerecha VBox
+      MoveScaled(46,1,126,67)
+      Expand = True
+      Spacing = True
+      Margin = True
+      Padding = 4
+      { hbxCabecera HBox
+        MoveScaled(0,0,80,4)
+        Spacing = True
+        { lblCodigo Label
+          MoveScaled(0,0,16,4)
+          Alignment = Align.Right
+          Text = ("Código:")
+        }
+        { txtCodigo TextBox
+          MoveScaled(18,0,16,4)
+          Background = Color.Background
+          Foreground = &H0000FF
+          ReadOnly = True
+        }
+      }
+      { hbxCabecera2 HBox
+        MoveScaled(0,4,80,4)
+        Spacing = True
+        { lblTitulo Label
+          MoveScaled(0,0,16,4)
+          Alignment = Align.Right
+          Text = ("Título:")
+        }
+        { txtTitulo TextBox
+          MoveScaled(20,0,16,4)
+          Expand = True
+        }
+      }
+      { hbxMeta HBox
+        MoveScaled(0,8,116,4)
+        Spacing = True
+        { lblEstado Label
+          MoveScaled(1,0,16,4)
+          Alignment = Align.Right
+          Text = ("Estado:")
+        }
+        { cmbEstado ComboBox
+          MoveScaled(18,0,16,4)
+          ReadOnly = True
+        }
+        { lblEvidencia Label
+          MoveScaled(36,0,16,4)
+          Alignment = Align.Right
+          Text = ("Evidencia:")
+        }
+        { cmbEvidencia ComboBox
+          MoveScaled(53,0,16,4)
+          ReadOnly = True
+        }
+        { lblFecha Label
+          MoveScaled(72,0,16,4)
+          Alignment = Align.Right
+          Text = ("Verificado el:")
+        }
+        { txtFecha TextBox
+          MoveScaled(89,0,16,4)
+          ToolTip = ("Formato ISO: aaaa-mm-dd")
+        }
+        { Spring1 Spring
+          MoveScaled(108,0,4,4)
+        }
+      }
+      { hbxEntorno HBox
+        MoveScaled(0,12,80,4)
+        Spacing = True
+        { lblEntorno Label
+          MoveScaled(0,0,16,4)
+          Alignment = Align.Right
+          Text = ("Entorno:")
+        }
+        { txtEntorno TextBox
+          MoveScaled(19,0,40,4)
+          ToolTip = ("Dónde se verificó: versión, componente, locale")
+          Expand = True
+        }
+      }
+      { txaCuerpo TextArea
+        MoveScaled(0,17,48,19)
+        Font = Font["Noto Mono"]
+        Expand = True
+        Wrap = True
+      }
+      { hbxRelaciones HBox
+        MoveScaled(1,45,80,4)
+        Spacing = True
+        { lblCampoRel Label
+          MoveScaled(0,0,16,4)
+          Alignment = Align.Right
+          Text = ("Relaciones:")
+        }
+        { txtRelaciones TextBox
+          MoveScaled(21,0,23,4)
+          ToolTip = ("tipo:CODIGO separados por coma. Ej: apoya:GV-24, contracara:GV-25")
+          Expand = True
+        }
+      }
+      { hbxPendiente HBox
+        MoveScaled(1,49,80,4)
+        Spacing = True
+        { lblCampoPend Label
+          MoveScaled(0,0,16,4)
+          Alignment = Align.Right
+          Text = ("Pendiente:")
+        }
+        { txtPendiente TextBox
+          MoveScaled(21,0,23,4)
+          ToolTip = ("Qué falta verificar o revisar en esta entrada")
+          Expand = True
+        }
+      }
+      { hbxPendiente2 HBox
+        MoveScaled(1,53,80,4)
+        Spacing = True
+        { lblAviso Label
+          MoveScaled(0,0,19,4)
+          Expand = True
+          Alignment = Align.Center
+        }
+      }
+      { hbxBotones HBox
+        MoveScaled(1,57,80,4)
+        Spacing = True
+        { Spring2 Spring
+          MoveScaled(48,0,4,4)
+        }
+        { btnGuardar Button
+          MoveScaled(58,0,16,4)
+          Text = ("Guardar")
+          Picture = Picture["iconos/guardar.png"]
+        }
+      }
+    }
+  }
+}

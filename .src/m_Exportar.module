@@ -1,0 +1,424 @@
+' Gambas module file
+
+' ============================================
+' Módulo    : m_Exportar
+' Propósito : Genera las salidas del corpus. Tres perfiles con
+'             consumidores distintos:
+'
+'             DOCUMENTAL — el .md completo que va a git. Incluye todo:
+'               correcciones, entradas deprecadas, pendientes y la
+'               familia GV de evidencia empírica. Es memoria.
+'
+'             OPERATIVO — el bloque que se pega como instrucciones a un
+'               modelo. Solo familias con en_operativo = 1 y solo
+'               entradas vigentes. Sin arqueología, sin metadatos.
+'
+'             VOLCADO — INSERT restaurables, para que git guarde algo
+'               que se pueda reconstruir y no solo un binario opaco.
+'
+' PRINCIPIO DE REPRODUCIBILIDAD: la salida es determinista. Orden fijo
+' por familias.orden y entradas.orden, sin fecha de generación, sin
+' ningún dato que cambie entre corridas. Dos exportaciones del mismo
+' contenido producen archivos idénticos, y el diff de git solo muestra
+' lo que efectivamente cambió.
+' ============================================
+
+Public Const ARCHIVO_DOCUMENTAL As String = "corpus.md"
+Public Const ARCHIVO_OPERATIVO As String = "instrucciones.md"
+Public Const ARCHIVO_VOLCADO As String = "corpus.sql"
+
+' ============================================
+' Función   : ExportarDocumental
+' Propósito : Escribe el corpus completo en Markdown
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub ExportarDocumental()
+
+  Dim sContenido As String
+
+  ' --- 1. ARMADO EN MEMORIA ANTES DE PREGUNTAR DÓNDE GUARDAR ---
+  sContenido = ArmarDocumental()
+  If sContenido = "" Then Return
+
+  ' --- 2. GUARDADO ---
+  If GuardarComo(ARCHIVO_DOCUMENTAL, "Markdown", "*.md", sContenido) Then
+    Message.Info("Corpus documental exportado.")
+  Endif
+
+End
+
+' ============================================
+' Función   : ExportarOperativo
+' Propósito : Escribe el bloque de instrucciones filtrado
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub ExportarOperativo()
+
+  Dim sContenido As String
+
+  ' --- 1. ARMADO ---
+  sContenido = ArmarOperativo()
+  If sContenido = "" Then Return
+
+  ' --- 2. GUARDADO ---
+  If GuardarComo(ARCHIVO_OPERATIVO, "Markdown", "*.md", sContenido) Then
+    Message.Info("Bloque operativo exportado.")
+  Endif
+
+End
+
+' ============================================
+' Función   : ExportarVolcado
+' Propósito : Escribe un volcado SQL restaurable de todo el contenido
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub ExportarVolcado()
+
+  Dim sContenido As String
+
+  ' --- 1. ARMADO ---
+  sContenido = ArmarVolcado()
+  If sContenido = "" Then Return
+
+  ' --- 2. GUARDADO ---
+  If GuardarComo(ARCHIVO_VOLCADO, "SQL", "*.sql", sContenido) Then
+    Message.Info("Volcado SQL exportado." & Chr(10) &
+      "Restaurar sobre una base vacía con:" & Chr(10) &
+      "sqlite3 corpus.sqlite < " & ARCHIVO_VOLCADO)
+  Endif
+
+End
+
+' ============================================
+' Función   : ArmarDocumental
+' Propósito : Construye el Markdown completo, con metadatos por entrada
+' Parámetros: ninguno
+' Retorna   : String — documento completo; vacío si falló la consulta
+' ============================================
+Private Function ArmarDocumental() As String
+
+  Dim aSalida As New String[]
+  Dim rFamilias As Result
+  Dim rEntradas As Result
+  Dim sPrefijo As String
+  Dim sMeta As String
+
+  ' --- 1. ENCABEZADO ---
+  ' SIN FECHA DE GENERACIÓN: ROMPERÍA LA REPRODUCIBILIDAD
+  aSalida.Add("# Corpus normativo de gbpublisher")
+  aSalida.Add("")
+  aSalida.Add("Documento generado desde la base del corpus. No editar a mano:")
+  aSalida.Add("los cambios se hacen en la aplicación y se vuelve a exportar.")
+  aSalida.Add("")
+
+  ' --- 2. FAMILIAS EN SU ORDEN DE EXPORTACIÓN ---
+  Try rFamilias = m_Base.hConn.Exec(
+    "SELECT prefijo, nombre, descripcion FROM familias ORDER BY orden")
+  If Error Then
+    Message.Error("No se pudieron leer las familias." & Chr(10) & Error.Text)
+    Return ""
+  Endif
+
+  While rFamilias.Available
+
+    sPrefijo = rFamilias["prefijo"]
+
+    aSalida.Add("---")
+    aSalida.Add("")
+    aSalida.Add("## " & sPrefijo & " — " & rFamilias["nombre"])
+    aSalida.Add("")
+
+    If Not IsNull(rFamilias["descripcion"]) Then
+      aSalida.Add(rFamilias["descripcion"])
+      aSalida.Add("")
+    Endif
+
+    ' --- 3. ENTRADAS DE LA FAMILIA, EN SU ORDEN INTERNO ---
+    Try rEntradas = m_Base.hConn.Exec(
+      "SELECT codigo, titulo, cuerpo, estado, evidencia, entorno, " &
+      "fecha_verificacion, relaciones, pendiente " &
+      "FROM entradas WHERE prefijo = &1 ORDER BY orden", sPrefijo)
+    If Error Then
+      Message.Error("No se pudieron leer las entradas de " & sPrefijo &
+        Chr(10) & Error.Text)
+      Return ""
+    Endif
+
+    While rEntradas.Available
+
+      aSalida.Add("### " & rEntradas["codigo"] & " — " & rEntradas["titulo"])
+      aSalida.Add("")
+
+      ' LÍNEA DE METADATOS: ESTADO, EVIDENCIA, ENTORNO, FECHA
+      sMeta = "**Estado:** " & rEntradas["estado"]
+      If Not IsNull(rEntradas["evidencia"]) Then
+        sMeta &= " · **Evidencia:** " & rEntradas["evidencia"]
+      Endif
+      If Not IsNull(rEntradas["entorno"]) Then
+        sMeta &= " · **Entorno:** " & rEntradas["entorno"]
+      Endif
+      If Not IsNull(rEntradas["fecha_verificacion"]) Then
+        sMeta &= " · **Verificado:** " & rEntradas["fecha_verificacion"]
+      Endif
+      aSalida.Add(sMeta)
+      aSalida.Add("")
+
+      aSalida.Add(rEntradas["cuerpo"])
+      aSalida.Add("")
+
+      ' RELACIONES Y PENDIENTES SOLO SI EXISTEN
+      If rEntradas["relaciones"] <> "" Then
+        aSalida.Add("**Relaciones:** " & rEntradas["relaciones"])
+        aSalida.Add("")
+      Endif
+
+      If Not IsNull(rEntradas["pendiente"]) Then
+        aSalida.Add("**PENDIENTE:** " & rEntradas["pendiente"])
+        aSalida.Add("")
+      Endif
+
+      rEntradas.MoveNext
+
+    Wend
+
+    rFamilias.MoveNext
+
+  Wend
+
+  Return aSalida.Join(Chr(10))
+
+End
+
+' ============================================
+' Función   : ArmarOperativo
+' Propósito : Construye el bloque de instrucciones. Filtra por familia
+'             marcada como operativa y por estado vigente, de modo que
+'             una regla corregida o deprecada no pueda llegar al modelo.
+' Parámetros: ninguno
+' Retorna   : String — documento filtrado; vacío si falló la consulta
+' ============================================
+Private Function ArmarOperativo() As String
+
+  Dim aSalida As New String[]
+  Dim rFamilias As Result
+  Dim rEntradas As Result
+  Dim sPrefijo As String
+
+  ' --- 1. ENCABEZADO ---
+  aSalida.Add("# Reglas vigentes de gbpublisher")
+  aSalida.Add("")
+  aSalida.Add("Solo reglas en vigencia. Las versiones corregidas, deprecadas")
+  aSalida.Add("o en hipótesis quedan fuera a propósito.")
+  aSalida.Add("")
+
+  ' --- 2. SOLO LAS FAMILIAS MARCADAS COMO OPERATIVAS ---
+  ' en_operativo SE COMPARA CON 1 Y NO CON True: EN SQLITE ES INTEGER,
+  ' NO EL TINYINT(1) DE MySQL AL QUE APLICA RC-GM-01
+  Try rFamilias = m_Base.hConn.Exec(
+    "SELECT prefijo, nombre FROM familias WHERE en_operativo = 1 ORDER BY orden")
+  If Error Then
+    Message.Error("No se pudieron leer las familias." & Chr(10) & Error.Text)
+    Return ""
+  Endif
+
+  While rFamilias.Available
+
+    sPrefijo = rFamilias["prefijo"]
+
+    ' --- 3. SOLO ENTRADAS VIGENTES ---
+    Try rEntradas = m_Base.hConn.Exec(
+      "SELECT codigo, titulo, cuerpo FROM entradas " &
+      "WHERE prefijo = &1 AND estado = 'vigente' ORDER BY orden", sPrefijo)
+    If Error Then
+      Message.Error("No se pudieron leer las entradas de " & sPrefijo &
+        Chr(10) & Error.Text)
+      Return ""
+    Endif
+
+    ' UNA FAMILIA SIN ENTRADAS VIGENTES NO APORTA TÍTULO VACÍO
+    If rEntradas.Count > 0 Then
+
+      aSalida.Add("## " & sPrefijo & " — " & rFamilias["nombre"])
+      aSalida.Add("")
+
+      While rEntradas.Available
+        aSalida.Add("### " & rEntradas["codigo"] & " — " & rEntradas["titulo"])
+        aSalida.Add("")
+        aSalida.Add(rEntradas["cuerpo"])
+        aSalida.Add("")
+        rEntradas.MoveNext
+      Wend
+
+    Endif
+
+    rFamilias.MoveNext
+
+  Wend
+
+  Return aSalida.Join(Chr(10))
+
+End
+
+' ============================================
+' Función   : ArmarVolcado
+' Propósito : Construye INSERT restaurables de familias y entradas.
+'             Se arma en Gambas y no con el CLI de sqlite3, que no está
+'             garantizado en una instalación mínima de Mint.
+' Parámetros: ninguno
+' Retorna   : String — script SQL; vacío si falló la consulta
+' ============================================
+Private Function ArmarVolcado() As String
+
+  Dim aSalida As New String[]
+  Dim rFamilias As Result
+  Dim rEntradas As Result
+
+  ' --- 1. ENCABEZADO ---
+  aSalida.Add("-- Volcado del corpus normativo de gbpublisher")
+  aSalida.Add("-- Restaurar sobre una base creada con el esquema vigente.")
+  aSalida.Add("")
+  aSalida.Add("BEGIN TRANSACTION;")
+  aSalida.Add("DELETE FROM entradas;")
+  aSalida.Add("DELETE FROM familias;")
+  aSalida.Add("")
+
+  ' --- 2. FAMILIAS PRIMERO: LAS ENTRADAS LAS REFERENCIAN ---
+  Try rFamilias = m_Base.hConn.Exec(
+    "SELECT prefijo, nombre, descripcion, orden, ancho_numero, en_operativo " &
+    "FROM familias ORDER BY orden")
+  If Error Then
+    Message.Error("No se pudieron leer las familias." & Chr(10) & Error.Text)
+    Return ""
+  Endif
+
+  While rFamilias.Available
+    aSalida.Add("INSERT INTO familias VALUES (" &
+      Citar(rFamilias["prefijo"]) & ", " &
+      Citar(rFamilias["nombre"]) & ", " &
+      Citar(rFamilias["descripcion"]) & ", " &
+      CStr(rFamilias["orden"]) & ", " &
+      CStr(rFamilias["ancho_numero"]) & ", " &
+      CStr(rFamilias["en_operativo"]) & ");")
+    rFamilias.MoveNext
+  Wend
+
+  aSalida.Add("")
+
+  ' --- 3. ENTRADAS EN ORDEN ESTABLE, PARA QUE EL DIFF SEA LEGIBLE ---
+  Try rEntradas = m_Base.hConn.Exec(
+    "SELECT e.prefijo, e.numero, e.codigo, e.titulo, e.cuerpo, e.estado, " &
+    "e.evidencia, e.entorno, e.fecha_verificacion, e.relaciones, e.pendiente, " &
+    "e.orden, e.fecha_alta, e.fecha_modificacion " &
+    "FROM entradas e JOIN familias f ON f.prefijo = e.prefijo " &
+    "ORDER BY f.orden, e.orden")
+  If Error Then
+    Message.Error("No se pudieron leer las entradas." & Chr(10) & Error.Text)
+    Return ""
+  Endif
+
+  While rEntradas.Available
+    ' SIN id_entrada: SE DEJA QUE SQLITE LO REASIGNE AL RESTAURAR,
+    ' PORQUE ES UN SUBROGADO SIN SIGNIFICADO. LA IDENTIDAD ES 'codigo'.
+    aSalida.Add("INSERT INTO entradas (prefijo, numero, codigo, titulo, cuerpo, " &
+      "estado, evidencia, entorno, fecha_verificacion, relaciones, " &
+      "pendiente, orden, fecha_alta, fecha_modificacion) VALUES (" &
+      Citar(rEntradas["prefijo"]) & ", " &
+      CStr(rEntradas["numero"]) & ", " &
+      Citar(rEntradas["codigo"]) & ", " &
+      Citar(rEntradas["titulo"]) & ", " &
+      Citar(rEntradas["cuerpo"]) & ", " &
+      Citar(rEntradas["estado"]) & ", " &
+      Citar(rEntradas["evidencia"]) & ", " &
+      Citar(rEntradas["entorno"]) & ", " &
+      Citar(rEntradas["fecha_verificacion"]) & ", " &
+      Citar(rEntradas["relaciones"]) & ", " &
+      Citar(rEntradas["pendiente"]) & ", " &
+      CStr(rEntradas["orden"]) & ", " &
+      Citar(rEntradas["fecha_alta"]) & ", " &
+      Citar(rEntradas["fecha_modificacion"]) & ");")
+    rEntradas.MoveNext
+  Wend
+
+  aSalida.Add("")
+  aSalida.Add("COMMIT;")
+  aSalida.Add("")
+
+  Return aSalida.Join(Chr(10))
+
+End
+
+' ============================================
+' Función   : Citar
+' Propósito : Convierte un valor en literal SQL: NULL si no hay dato,
+'             y comilla simple duplicada si la hay.
+' Parámetros: vValor As Variant — valor leído de la base
+' Retorna   : String — literal listo para concatenar
+' ============================================
+Private Function Citar(vValor As Variant) As String
+
+  Dim sTexto As String
+
+  ' --- 1. NULL SE EMITE COMO PALABRA CLAVE, NO COMO CADENA ---
+  If IsNull(vValor) Then Return "NULL"
+
+  sTexto = CStr(vValor)
+
+  ' --- 2. DUPLICADO DE LA COMILLA SIMPLE, QUE ES EL ESCAPE DE SQL ---
+  sTexto = Replace(sTexto, "'", "''")
+
+  Return "'" & sTexto & "'"
+
+End
+
+' ============================================
+' Función   : GuardarComo
+' Propósito : Único punto de guardado de las tres exportaciones. Pide
+'             destino, confirma sobrescritura y escribe en UTF-8.
+' Parámetros: sSugerido As String — nombre de archivo propuesto
+'             sDescripcion As String — texto del filtro
+'             sPatron As String — patrón del filtro
+'             sContenido As String — texto a escribir
+' Retorna   : Boolean — True si el archivo quedó escrito
+' ============================================
+Private Function GuardarComo(sSugerido As String, sDescripcion As String, sPatron As String, sContenido As String) As Boolean
+
+  Dim sDestino As String
+
+  ' --- 1. DIÁLOGO, CON LA ÚLTIMA CARPETA COMO PUNTO DE PARTIDA ---
+  Dialog.Title = "Exportar como..."
+  Dialog.Filter = [sPatron, sDescripcion]
+  Dialog.AutoExt = True
+  Dialog.Path = Settings["Exportar/UltimaCarpeta", User.Home] &/ sSugerido
+
+  ' ATENCIÓN: LOS DIÁLOGOS DE GAMBAS DEVUELVEN True AL CANCELAR.
+  ' IGNORAR ESTE RETORNO ES EL BUG QUE ESCRIBE SOBRE EL DESTINO ANTERIOR.
+  If Dialog.SaveFile() Then Return False
+
+  sDestino = Dialog.Path
+  If sDestino = "" Then Return False
+
+  ' --- 2. CONFIRMACIÓN DE SOBRESCRITURA ---
+  If Exist(sDestino) Then
+    If Message.Question("El archivo ya existe:" & Chr(10) & sDestino & Chr(10) &
+        "¿Sobrescribirlo?", "Sobrescribir", "Cancelar") <> 1 Then
+      Return False
+    Endif
+  Endif
+
+  ' --- 3. ESCRITURA: File.Save OPERA EN UTF-8 NATIVAMENTE (SC-02) ---
+  Try File.Save(sDestino, sContenido)
+  If Error Then
+    Message.Error("No se pudo escribir el archivo:" & Chr(10) &
+      sDestino & Chr(10) & Error.Text)
+    Return False
+  Endif
+
+  ' --- 4. MEMORIA DE LA CARPETA PARA LA PRÓXIMA EXPORTACIÓN ---
+  Settings["Exportar/UltimaCarpeta"] = File.Dir(sDestino)
+
+  Return True
+
+End

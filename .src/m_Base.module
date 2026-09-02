@@ -1,0 +1,289 @@
+' Gambas module file
+
+' ============================================
+' Módulo    : m_Base
+' Propósito : Dueño de la conexión SQLite. Crea la base si no existe,
+'             la abre, activa las claves foráneas y verifica la versión
+'             del esquema antes de que cualquier otro módulo la use.
+'             La base vive en ~/.gbcorpus/corpus.sqlite
+' ============================================
+
+Public hConn As Connection
+
+Public Const VERSION_ESQUEMA As Integer = 1
+Public Const NOMBRE_BASE As String = "corpus.sqlite"
+Public Const TIPO_DRIVER As String = "sqlite3"
+
+' ============================================
+' Función   : CarpetaBase
+' Propósito : Devuelve la carpeta donde vive el archivo de la base.
+'             Es una carpeta oculta en la home del usuario, de modo que
+'             la aplicación pueda instalarse por .deb en /usr/bin y la
+'             base siga estando en un lugar escribible.
+' Parámetros: ninguno
+' Retorna   : String — ruta absoluta de la carpeta
+' ============================================
+Public Function CarpetaBase() As String
+
+  Return User.Home &/ ".gbcorpus"
+
+End
+
+' ============================================
+' Función   : RutaArchivoBase
+' Propósito : Ruta completa del archivo .sqlite
+' Parámetros: ninguno
+' Retorna   : String — ruta absoluta del archivo
+' ============================================
+Public Function RutaArchivoBase() As String
+
+  Return CarpetaBase() &/ NOMBRE_BASE
+
+End
+
+' ============================================
+' Función   : Conectar
+' Propósito : Abre la conexión con la base, creándola si hace falta.
+'             Fail-fast ordenado: infraestructura, luego configuración.
+' Parámetros: ninguno
+' Retorna   : Boolean — True si la conexión quedó utilizable
+' ============================================
+Public Function Conectar() As Boolean
+
+  Dim sCarpeta As String
+  Dim sArchivo As String
+
+  ' --- 1. INICIALIZACIÓN ---
+  sCarpeta = CarpetaBase()
+  sArchivo = RutaArchivoBase()
+
+  ' --- 2. LA CARPETA OCULTA SE CREA EN EL PRIMER ARRANQUE ---
+  If Not Exist(sCarpeta) Then
+    Try Mkdir sCarpeta
+    If Error Then
+      Message.Error("No se pudo crear la carpeta de la base:" & Chr(10) &
+        sCarpeta & Chr(10) & Error.Text)
+      Return False
+    Endif
+  Endif
+
+  ' --- 3. SI NO HAY ARCHIVO, SE CREA LA BASE VACÍA CON SU ESQUEMA ---
+  If Not Exist(sArchivo) Then
+    If Not CrearBaseVacia(sCarpeta) Then Return False
+  Endif
+
+  ' --- 4. APERTURA DE LA CONEXIÓN DE TRABAJO ---
+  hConn = New Connection
+  hConn.Type = TIPO_DRIVER
+  hConn.Host = sCarpeta
+  hConn.Name = NOMBRE_BASE
+
+  Try hConn.Open()
+  If Error Then
+    Message.Error("No se pudo abrir la base:" & Chr(10) &
+      sArchivo & Chr(10) & Error.Text)
+    hConn = Null
+    Return False
+  Endif
+
+  ' --- 5. CLAVES FORÁNEAS: SON POR CONEXIÓN Y SQLITE LAS TRAE APAGADAS ---
+  Try hConn.Exec("PRAGMA foreign_keys = ON")
+  If Error Then
+    Message.Warning("No se pudieron activar las claves foráneas." & Chr(10) &
+      "La integridad referencial queda sin verificar." & Chr(10) &
+      Error.Text)
+  Endif
+
+  ' --- 6. VERIFICACIÓN DE VERSIÓN DE ESQUEMA ---
+  Return VerificarEsquema()
+
+End
+
+' ============================================
+' Función   : VerificarEsquema
+' Propósito : Confirma que la base abierta tiene la versión de esquema
+'             que este binario sabe manejar.
+' Parámetros: ninguno
+' Retorna   : Boolean — True si la versión coincide
+' ============================================
+Public Function VerificarEsquema() As Boolean
+
+  Dim rVersion As Result
+  Dim iVersion As Integer
+
+  ' --- 1. LECTURA DE LA VERSIÓN REGISTRADA ---
+  Try rVersion = hConn.Exec("SELECT version FROM esquema_version " &
+    "ORDER BY version DESC LIMIT 1")
+  If Error Then
+    Message.Error("La base no tiene tabla esquema_version." & Chr(10) &
+      "Puede no ser una base de corpus válida." & Chr(10) & Error.Text)
+    Return False
+  Endif
+
+  ' --- 2. TABLA PRESENTE PERO VACÍA: TAMBIÉN ES ESQUEMA INVÁLIDO ---
+  If Not rVersion.Available Then
+    Message.Error("La tabla esquema_version está vacía.")
+    Return False
+  Endif
+
+  iVersion = rVersion["version"]
+
+  ' --- 3. COMPARACIÓN CONTRA LA VERSIÓN QUE ESTE BINARIO MANEJA ---
+  If iVersion <> VERSION_ESQUEMA Then
+    Message.Error("Versión de esquema incompatible." & Chr(10) &
+      "La base es v" & CStr(iVersion) &
+      " y el programa espera v" & CStr(VERSION_ESQUEMA) & ".")
+    Return False
+  Endif
+
+  Return True
+
+End
+
+' ============================================
+' Función   : Cerrar
+' Propósito : Cierra la conexión de forma idempotente
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub Cerrar()
+
+  ' --- 1. NADA QUE CERRAR ---
+  If IsNull(hConn) Then Return
+
+  ' --- 2. CIERRE PROTEGIDO: UN FALLO ACÁ NO DEBE IMPEDIR SALIR ---
+  Try hConn.Close()
+  hConn = Null
+
+End
+
+' ============================================
+' Función   : CrearBaseVacia
+' Propósito : Crea el archivo .sqlite y ejecuta el DDL completo.
+' Parámetros: sCarpeta As String — carpeta donde crear el archivo
+' Retorna   : Boolean — True si la base quedó creada y poblada
+' ============================================
+Private Function CrearBaseVacia(sCarpeta As String) As Boolean
+
+  Dim hCrear As Connection
+  Dim aDDL As String[]
+  Dim sSentencia As String
+
+  ' --- 1. CONEXIÓN SIN BASE: EN SQLITE, EL "SERVIDOR" ES LA CARPETA ---
+  hCrear = New Connection
+  hCrear.Type = TIPO_DRIVER
+  hCrear.Host = sCarpeta
+  hCrear.Name = ""
+
+  Try hCrear.Open()
+  If Error Then
+    Message.Error("No se pudo acceder a la carpeta de bases:" & Chr(10) &
+      sCarpeta & Chr(10) & Error.Text)
+    Return False
+  Endif
+
+  ' --- 2. ALTA DEL ARCHIVO DE BASE ---
+  Try hCrear.Databases.Add(NOMBRE_BASE)
+  If Error Then
+    Message.Error("No se pudo crear el archivo de base." & Chr(10) & Error.Text)
+    Try hCrear.Close()
+    Return False
+  Endif
+
+  Try hCrear.Close()
+
+  ' --- 3. REAPERTURA YA SOBRE LA BASE CREADA ---
+  hCrear.Name = NOMBRE_BASE
+  Try hCrear.Open()
+  If Error Then
+    Message.Error("La base se creó pero no se pudo abrir." & Chr(10) & Error.Text)
+    Return False
+  Endif
+
+  ' --- 4. EJECUCIÓN DEL DDL, SENTENCIA POR SENTENCIA ---
+  ' EL DRIVER NO ACEPTA VARIAS SENTENCIAS EN UNA SOLA LLAMADA
+  aDDL = SentenciasDDL()
+  For Each sSentencia In aDDL
+    Try hCrear.Exec(sSentencia)
+    If Error Then
+      Message.Error("Fallo al crear el esquema." & Chr(10) &
+        "Sentencia: " & Left$(sSentencia, 60) & Chr(10) & Error.Text)
+      Try hCrear.Close()
+      Return False
+    Endif
+  Next
+
+  Try hCrear.Close()
+  Return True
+
+End
+
+' ============================================
+' Función   : SentenciasDDL
+' Propósito : Devuelve el DDL como sentencias sueltas. Vive en código y
+'             no en un archivo externo para que la creación de la base no
+'             dependa de que un .sql viaje junto al ejecutable.
+' Parámetros: ninguno
+' Retorna   : String[] — sentencias en orden de ejecución
+' ============================================
+Private Function SentenciasDDL() As String[]
+
+  Dim aDDL As New String[]
+
+  ' --- 1. TABLA DE FAMILIAS ---
+  aDDL.Add("CREATE TABLE familias (" &
+    "prefijo TEXT PRIMARY KEY, " &
+    "nombre TEXT NOT NULL, " &
+    "descripcion TEXT, " &
+    "orden INTEGER NOT NULL, " &
+    "ancho_numero INTEGER NOT NULL DEFAULT 2, " &
+    "en_operativo INTEGER NOT NULL DEFAULT 1)")
+
+  ' --- 2. TABLA DE ENTRADAS ---
+  aDDL.Add("CREATE TABLE entradas (" &
+    "id_entrada INTEGER PRIMARY KEY, " &
+    "prefijo TEXT NOT NULL REFERENCES familias(prefijo), " &
+    "numero INTEGER NOT NULL, " &
+    "codigo TEXT NOT NULL UNIQUE, " &
+    "titulo TEXT NOT NULL, " &
+    "cuerpo TEXT NOT NULL DEFAULT '', " &
+    "estado TEXT NOT NULL DEFAULT 'vigente' " &
+    "CHECK (estado IN ('vigente','corregida','deprecada','hipotesis')), " &
+    "evidencia TEXT CHECK (evidencia IN ('empirica','doc_oficial','inferida')), " &
+    "entorno TEXT, " &
+    "fecha_verificacion TEXT, " &
+    "relaciones TEXT NOT NULL DEFAULT '', " &
+    "pendiente TEXT, " &
+    "orden INTEGER NOT NULL, " &
+    "fecha_alta TEXT NOT NULL, " &
+    "fecha_modificacion TEXT NOT NULL, " &
+    "UNIQUE (prefijo, numero))")
+
+  ' --- 3. ÍNDICES ---
+  aDDL.Add("CREATE INDEX ix_entradas_familia ON entradas (prefijo, orden)")
+  aDDL.Add("CREATE INDEX ix_entradas_estado ON entradas (estado)")
+
+  ' --- 4. VERSIÓN DE ESQUEMA ---
+  aDDL.Add("CREATE TABLE esquema_version (version INTEGER NOT NULL, fecha TEXT NOT NULL)")
+
+  ' --- 5. SEMILLA DE FAMILIAS ---
+  aDDL.Add("INSERT INTO familias VALUES ('RC-GM','Reglas críticas Gambas'," &
+    "'Comportamientos del lenguaje que obligan a un patrón determinado',10,2,1)")
+  aDDL.Add("INSERT INTO familias VALUES ('RC-XJ','Reglas críticas XSLT + JATS'," &
+    "'Transformación y validación de XML de revistas',20,2,1)")
+  aDDL.Add("INSERT INTO familias VALUES ('RC-DB','Reglas críticas DocBook'," &
+    "'Modelo de contenido y serialización de libros',30,2,1)")
+  aDDL.Add("INSERT INTO familias VALUES ('RC-PL','Reglas críticas Perl'," &
+    "'Motor de expresiones regulares externo',40,2,1)")
+  aDDL.Add("INSERT INTO familias VALUES ('SC','Soluciones canónicas'," &
+    "'Decisiones cerradas: aplicar, no rediscutir',50,2,1)")
+  aDDL.Add("INSERT INTO familias VALUES ('GV','Comportamientos verificados'," &
+    "'Evidencia empírica de gambas-verificado.md',60,2,0)")
+
+  ' --- 6. SELLO DE VERSIÓN ---
+  aDDL.Add("INSERT INTO esquema_version VALUES (" & CStr(VERSION_ESQUEMA) &
+    ", date('now'))")
+
+  Return aDDL
+
+End

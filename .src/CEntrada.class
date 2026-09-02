@@ -1,0 +1,22 @@
+' Gambas class file
+
+' ============================================
+' Clase     : CEntrada
+' Propósito : Representa una entrada del corpus (regla o apartado de
+'             evidencia) fuera del objeto Result, para que los
+'             formularios nunca toquen la base directamente.
+' ============================================
+
+Public iId As Integer
+Public sPrefijo As String
+Public iNumero As Integer
+Public sCodigo As String
+Public sTitulo As String
+Public sCuerpo As String
+Public sEstado As String
+Public sEvidencia As String
+Public sEntorno As String
+Public sFechaVerificacion As String
+Public sRelaciones As String
+Public sPendiente As String
+Public iOrden As Integer

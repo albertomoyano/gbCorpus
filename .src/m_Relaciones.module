@@ -1,0 +1,202 @@
+' Gambas module file
+
+' ============================================
+' Módulo    : m_Relaciones
+' Propósito : Interpreta la columna 'relaciones' de una entrada, la
+'             valida contra los códigos existentes y resuelve los
+'             vínculos en las dos direcciones para el ListBox inferior.
+'
+' SINTAXIS DE LA COLUMNA:
+'   tipo:CODIGO, tipo:CODIGO, CODIGO
+'   El tipo es libre (apoya, contracara, reemplaza, deriva...).
+'   Un token sin tipo se registra como 'vinculo'.
+' ============================================
+
+Public Const TIPO_POR_DEFECTO As String = "vinculo"
+
+' ============================================
+' Función   : Tokenizar
+' Propósito : Parte la columna en pares tipo/código, sin tocar la base.
+' Parámetros: sTexto As String — contenido de la columna relaciones
+' Retorna   : CRelacion[] — vínculos declarados, sin resolver
+' ============================================
+Public Function Tokenizar(sTexto As String) As CRelacion[]
+
+  Dim aVinculos As New CRelacion[]
+  Dim aTokens As String[]
+  Dim sToken As String
+  Dim aPartes As String[]
+  Dim oVinculo As CRelacion
+
+  ' --- 1. VALIDACIÓN DE ENTRADA ---
+  If Trim$(sTexto) = "" Then Return aVinculos
+
+  ' --- 2. SEPARACIÓN POR COMAS ---
+  aTokens = Split(sTexto, ",")
+
+  ' --- 3. CADA TOKEN PUEDE TRAER TIPO O NO ---
+  For Each sToken In aTokens
+
+    sToken = Trim$(sToken)
+    If sToken = "" Then Continue
+
+    oVinculo = New CRelacion
+    aPartes = Split(sToken, ":")
+
+    If aPartes.Count >= 2 Then
+      oVinculo.sTipo = Trim$(aPartes[0])
+      oVinculo.sCodigo = Trim$(aPartes[1])
+    Else
+      oVinculo.sTipo = TIPO_POR_DEFECTO
+      oVinculo.sCodigo = sToken
+    Endif
+
+    ' UN TOKEN CON TIPO PERO SIN CÓDIGO NO ES UN VÍNCULO
+    If oVinculo.sCodigo = "" Then Continue
+
+    aVinculos.Add(oVinculo)
+
+  Next
+
+  Return aVinculos
+
+End
+
+' ============================================
+' Función   : ValidarRelaciones
+' Propósito : Detecta códigos inexistentes antes de guardar. Un vínculo
+'             muerto es un canal mudo: no falla, simplemente no aparece.
+' Parámetros: sTexto As String — contenido de la columna relaciones
+' Retorna   : String — códigos desconocidos separados por coma; vacío si
+'                      está todo bien
+' ============================================
+Public Function ValidarRelaciones(sTexto As String) As String
+
+  Dim aVinculos As CRelacion[]
+  Dim oVinculo As CRelacion
+  Dim aDesconocidos As New String[]
+
+  ' --- 1. PARSEO ---
+  aVinculos = Tokenizar(sTexto)
+  If aVinculos.Count = 0 Then Return ""
+
+  ' --- 2. CADA CÓDIGO DEBE EXISTIR EN LA BASE ---
+  For Each oVinculo In aVinculos
+    If Not m_Corpus.ExisteCodigo(oVinculo.sCodigo) Then
+      If aDesconocidos.Find(oVinculo.sCodigo) < 0 Then
+        aDesconocidos.Add(oVinculo.sCodigo)
+      Endif
+    Endif
+  Next
+
+  If aDesconocidos.Count = 0 Then Return ""
+
+  Return aDesconocidos.Join(", ")
+
+End
+
+' ============================================
+' Función   : ResolverParaEntrada
+' Propósito : Devuelve los vínculos de una entrada en las DOS
+'             direcciones: los que ella declara y los que la apuntan.
+'             La dirección inversa es la que da valor a la vista: parado
+'             sobre una evidencia, ver qué reglas dependen de ella.
+' Parámetros: sCodigo As String — entrada en curso
+' Retorna   : CRelacion[] — vínculos resueltos y con etiqueta armada
+' ============================================
+Public Function ResolverParaEntrada(sCodigo As String) As CRelacion[]
+
+  Dim aResultado As New CRelacion[]
+  Dim oEntrada As CEntrada
+  Dim aDirectos As CRelacion[]
+  Dim oVinculo As CRelacion
+  Dim rOtras As Result
+  Dim aDeOtra As CRelacion[]
+  Dim oDeOtra As CRelacion
+  Dim oInverso As CRelacion
+
+  ' --- 1. VALIDACIÓN DE ENTRADA ---
+  If sCodigo = "" Then Return aResultado
+
+  ' --- 2. DIRECCIÓN DIRECTA: LO QUE ESTA ENTRADA DECLARA ---
+  oEntrada = m_Corpus.LeerEntrada(sCodigo)
+  If IsNull(oEntrada) Then Return aResultado
+
+  aDirectos = Tokenizar(oEntrada.sRelaciones)
+  For Each oVinculo In aDirectos
+    oVinculo.bInversa = False
+    oVinculo.sTitulo = m_Corpus.TituloDeCodigo(oVinculo.sCodigo)
+    oVinculo.bRota = (oVinculo.sTitulo = "")
+    If oVinculo.bRota Then
+      If m_Corpus.ExisteCodigo(oVinculo.sCodigo) Then oVinculo.bRota = False
+    Endif
+    oVinculo.sEtiqueta = ArmarEtiqueta(oVinculo)
+    aResultado.Add(oVinculo)
+  Next
+
+  ' --- 3. DIRECCIÓN INVERSA: QUIÉN NOS APUNTA ---
+  ' SE TRAEN TODAS LAS FILAS CON VÍNCULOS Y SE PARSEAN EN GAMBAS.
+  ' UN LIKE DARÍA FALSOS POSITIVOS: 'GV-2' MATCHEA DENTRO DE 'GV-24'.
+  Try rOtras = m_Base.hConn.Exec(
+    "SELECT codigo, titulo, relaciones FROM entradas " &
+    "WHERE relaciones <> '' AND codigo <> &1 ORDER BY codigo", sCodigo)
+  If Error Then
+    Message.Error("No se pudieron leer las relaciones inversas." & Chr(10) & Error.Text)
+    Return aResultado
+  Endif
+
+  While rOtras.Available
+
+    aDeOtra = Tokenizar(rOtras["relaciones"])
+
+    For Each oDeOtra In aDeOtra
+      ' COMPARACIÓN EXACTA DE CÓDIGO, NO POR SUBCADENA
+      If oDeOtra.sCodigo = sCodigo Then
+        oInverso = New CRelacion
+        oInverso.sTipo = oDeOtra.sTipo
+        oInverso.sCodigo = rOtras["codigo"]
+        oInverso.sTitulo = rOtras["titulo"]
+        oInverso.bInversa = True
+        oInverso.bRota = False
+        oInverso.sEtiqueta = ArmarEtiqueta(oInverso)
+        aResultado.Add(oInverso)
+      Endif
+    Next
+
+    rOtras.MoveNext
+
+  Wend
+
+  Return aResultado
+
+End
+
+' ============================================
+' Función   : ArmarEtiqueta
+' Propósito : Formatea la línea del ListBox. La flecha indica dirección
+'             y el vínculo roto se muestra en lugar de omitirse.
+' Parámetros: oVinculo As CRelacion — vínculo ya resuelto
+' Retorna   : String — línea para el ListBox
+' ============================================
+Private Function ArmarEtiqueta(oVinculo As CRelacion) As String
+
+  Dim sFlecha As String
+  Dim sCola As String
+
+  ' --- 1. DIRECCIÓN ---
+  If oVinculo.bInversa Then
+    sFlecha = "←"
+  Else
+    sFlecha = "→"
+  Endif
+
+  ' --- 2. COLA: TÍTULO O AVISO DE VÍNCULO MUERTO ---
+  If oVinculo.bRota Then
+    sCola = "[CÓDIGO INEXISTENTE]"
+  Else
+    sCola = oVinculo.sTitulo
+  Endif
+
+  Return sFlecha & " " & oVinculo.sTipo & " · " & oVinculo.sCodigo & " — " & sCola
+
+End

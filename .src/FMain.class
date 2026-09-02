@@ -1,0 +1,802 @@
+' Gambas class file
+
+' ============================================
+' Formulario: FMain
+' Propósito : Vista maestro-detalle del corpus normativo. La aplicación
+'             es un instrumento de LECTURA y PULIDO: permite consultar,
+'             navegar el grafo de relaciones y corregir el texto de las
+'             entradas, pero NO da de alta ni elimina entradas ni
+'             familias. Esas son decisiones sobre el corpus y se aplican
+'             por script SQL, no desde la interfaz.
+'             Los handlers son delgados: toda la lógica vive en m_Base,
+'             m_Corpus, m_Relaciones y m_Exportar.
+' ============================================
+
+' --- BANDERA DE CARGA: SUPRIME LOS EVENTOS QUE DISPARA LA PROPIA UI ---
+' ASIGNAR .Index O .Text POR CÓDIGO LEVANTA Click Y Change; SIN ESTA
+' BANDERA, CARGAR UNA ENTRADA LA MARCARÍA COMO MODIFICADA
+Private $bCargando As Boolean
+
+' --- ESTADO DE LA VISTA ---
+Private $bModificado As Boolean
+Private $aRelaciones As New CRelacion[]
+Private $aHistorial As New String[]
+
+' --- ÍNDICE DEL FILTRO EFECTIVAMENTE APLICADO ---
+' NO SE DERIVA DE LA ENTRADA EN CURSO: CON LOS FILTROS ANALÍTICOS
+' (pendientes, sin verificar, no vigentes) NO HAY FAMILIA DE LA CUAL
+' DERIVARLO. SE RECUERDA EL ÚLTIMO ÍNDICE VÁLIDO PARA PODER RESTAURARLO
+' CUANDO EL USUARIO CANCELA UN DESCARTE DE CAMBIOS.
+Private $iFiltroEnCurso As Integer
+
+' ============================================
+' Función   : Form_Open
+' Propósito : Arranque en orden fail-fast: infraestructura, configuración,
+'             interfaz.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub Form_Open()
+
+  ' --- 1. INFRAESTRUCTURA: SIN BASE NO HAY APLICACIÓN ---
+  If Not m_Base.Conectar() Then
+    ' m_Base YA INFORMÓ LA CAUSA CONCRETA
+    Quit
+  Endif
+
+  ' --- 2. GEOMETRÍA GUARDADA Y TÍTULO ---
+  Settings.Read(Me)
+  Me.Text = "Corpus normativo — " & m_Base.RutaArchivoBase()
+
+  ' --- 3. PROPORCIÓN DE LOS DOS PANELES ---
+  ' SE FIJA UNA SOLA VEZ. CALCULARLA EN UN HANDLER Resize LA RECOMPUTA
+  ' EN CADA CUADRO DEL ARRASTRE, SIN NINGUNA GANANCIA
+  hspPrincipal.Layout = [1, 2]
+
+  ' --- 4. LISTAS FIJAS DE LOS COMBOS DE METADATOS ---
+  CargarCombosFijos()
+
+  ' --- 5. FILTROS Y ENTRADAS ---
+  CargarComboFiltros()
+  RefrescarLista(m_Corpus.FILTRO_TODAS)
+
+  ' --- 6. ESTADO INICIAL DE CONTROLES ---
+  LimpiarDetalle()
+  ActualizarBotones()
+
+End
+
+' ============================================
+' Función   : Form_Close
+' Propósito : Guard de cambios sin guardar antes de cerrar (SC-06) y
+'             liberación explícita de la conexión.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub Form_Close()
+
+  ' --- 1. GUARD: LA SALIDA ES UN CAMBIO DE CONTEXTO MÁS ---
+  If Not ConfirmarDescartarCambios() Then
+    Stop Event
+    Return
+  Endif
+
+  ' --- 2. LIBERACIÓN EXPLÍCITA: NO SE DELEGA EN Finally (RC-GM-20) ---
+  Settings.Write(Me)
+  m_Base.Cerrar()
+
+End
+
+' ============================================
+' Función   : cmbFamilia_Click
+' Propósito : Cambia el filtro del ListBox principal. El combo mezcla
+'             familias con filtros analíticos sobre el corpus entero;
+'             el control conserva el nombre cmbFamilia por compatibilidad
+'             con el .form.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub cmbFamilia_Click()
+
+  Dim sFiltro As String
+
+  ' --- 1. EVENTO DISPARADO POR CÓDIGO: NO ES ACCIÓN DEL USUARIO ---
+  If $bCargando Then Return
+
+  ' --- 2. GUARD DE CAMBIOS SIN GUARDAR ---
+  If Not ConfirmarDescartarCambios() Then
+    RestaurarSeleccionFiltro()
+    Return
+  Endif
+
+  ' --- 3. RECARGA DE LA LISTA CON EL NUEVO FILTRO ---
+  sFiltro = m_Corpus.FiltroDeIndice(cmbFamilia.Index)
+  RefrescarLista(sFiltro)
+
+  ' --- 4. EL FILTRO QUEDA ACEPTADO: SE RECUERDA PARA PODER RESTAURARLO ---
+  $iFiltroEnCurso = cmbFamilia.Index
+
+  LimpiarDetalle()
+  ActualizarBotones()
+
+End
+
+' ============================================
+' Función   : lstEntradas_Click
+' Propósito : Muestra la entrada seleccionada en el panel de detalle
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub lstEntradas_Click()
+
+  Dim sCodigo As String
+
+  ' --- 1. EVENTO DISPARADO POR CÓDIGO ---
+  If $bCargando Then Return
+
+  ' --- 2. GUARD DE CAMBIOS SIN GUARDAR ---
+  If Not ConfirmarDescartarCambios() Then
+    RestaurarSeleccionEntrada()
+    Return
+  Endif
+
+  ' --- 3. CARGA DEL DETALLE ---
+  sCodigo = m_Corpus.CodigoDeIndice(lstEntradas.Index)
+  If sCodigo = "" Then Return
+
+  MostrarEntrada(sCodigo)
+
+End
+
+' ============================================
+' Función   : lstRelaciones_Click
+' Propósito : Salta a la entrada del otro extremo del vínculo, apilando
+'             la actual para que el botón Volver tenga a dónde volver.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub lstRelaciones_Click()
+
+  Dim iIndice As Integer
+  Dim oVinculo As CRelacion
+  Dim sOrigen As String
+
+  ' --- 1. EVENTO DISPARADO POR CÓDIGO ---
+  If $bCargando Then Return
+
+  ' --- 2. VALIDACIÓN DE RANGO ---
+  iIndice = lstRelaciones.Index
+  If iIndice < 0 Then Return
+  If iIndice >= $aRelaciones.Count Then Return
+
+  oVinculo = $aRelaciones[iIndice]
+
+  ' --- 3. UN VÍNCULO MUERTO SE MUESTRA PERO NO SE NAVEGA ---
+  If oVinculo.bRota Then
+    Message.Warning("El código " & oVinculo.sCodigo & " no existe en el corpus." & Chr(10) &
+      "Corregir el campo Relaciones de esta entrada.")
+    Return
+  Endif
+
+  ' --- 4. GUARD DE CAMBIOS SIN GUARDAR ---
+  If Not ConfirmarDescartarCambios() Then Return
+
+  ' --- 5. APILADO DEL ORIGEN Y SALTO ---
+  sOrigen = m_Corpus.CodigoEnCurso
+  If sOrigen <> "" Then $aHistorial.Add(sOrigen)
+
+  SeleccionarCodigo(oVinculo.sCodigo)
+
+End
+
+' ============================================
+' Función   : btnAtras_Click
+' Propósito : Deshace el último salto por relaciones
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub btnAtras_Click()
+
+  Dim sCodigo As String
+
+  ' --- 1. VALIDACIÓN: PILA VACÍA ---
+  If $aHistorial.Count = 0 Then Return
+
+  ' --- 2. GUARD DE CAMBIOS SIN GUARDAR ---
+  If Not ConfirmarDescartarCambios() Then Return
+
+  ' --- 3. DESAPILADO ---
+  sCodigo = $aHistorial[$aHistorial.Max]
+  $aHistorial.Remove($aHistorial.Max)
+
+  SeleccionarCodigo(sCodigo)
+
+End
+
+' ============================================
+' Función   : btnGuardar_Click
+' Propósito : Valida y persiste la entrada en curso. Es la única
+'             escritura que la aplicación hace sobre el corpus.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub btnGuardar_Click()
+
+  Dim oEntrada As CEntrada
+  Dim sDesconocidos As String
+  Dim sCodigo As String
+
+  ' --- 1. VALIDACIÓN: DEBE HABER ENTRADA EN CURSO ---
+  sCodigo = m_Corpus.CodigoEnCurso
+  If sCodigo = "" Then
+    Message.Info("No hay ninguna entrada seleccionada.")
+    Return
+  Endif
+
+  ' --- 2. VALIDACIÓN: EL TÍTULO ES LO QUE SE VE EN LA LISTA ---
+  If Trim$(txtTitulo.Text) = "" Then
+    Message.Warning("El título no puede quedar vacío.")
+    txtTitulo.SetFocus()
+    Return
+  Endif
+
+  ' --- 3. VALIDACIÓN: NINGÚN VÍNCULO PUEDE APUNTAR A LA NADA ---
+  sDesconocidos = m_Relaciones.ValidarRelaciones(txtRelaciones.Text)
+  If sDesconocidos <> "" Then
+    Message.Warning("Estos códigos no existen en el corpus:" & Chr(10) &
+      sDesconocidos & Chr(10) & Chr(10) &
+      "Corregirlos antes de guardar.")
+    txtRelaciones.SetFocus()
+    Return
+  Endif
+
+  ' --- 4. VOLCADO DE LA UI AL OBJETO ---
+  oEntrada = m_Corpus.LeerEntrada(sCodigo)
+  If IsNull(oEntrada) Then
+    Message.Error("La entrada " & sCodigo & " ya no está en la base.")
+    Return
+  Endif
+
+  oEntrada.sTitulo = Trim$(txtTitulo.Text)
+  oEntrada.sCuerpo = txaCuerpo.Text
+  oEntrada.sEstado = cmbEstado.Text
+  oEntrada.sEvidencia = cmbEvidencia.Text
+  oEntrada.sEntorno = Trim$(txtEntorno.Text)
+  oEntrada.sFechaVerificacion = Trim$(txtFecha.Text)
+  oEntrada.sRelaciones = Trim$(txtRelaciones.Text)
+  oEntrada.sPendiente = Trim$(txtPendiente.Text)
+
+  ' --- 5. PERSISTENCIA ---
+  If Not m_Corpus.GuardarEntrada(oEntrada) Then Return
+
+  $bModificado = False
+
+  ' --- 6. LA LÍNEA DE LA LISTA PUDO CAMBIAR: TÍTULO O ESTADO ---
+  ' Y CON LOS FILTROS ANALÍTICOS LA ENTRADA PUEDE HABER DEJADO DE
+  ' CUMPLIR EL CRITERIO: SI YA NO ESTÁ EN LA LISTA, SeleccionarCodigo
+  ' ABRE EL FILTRO A TODO EL CORPUS
+  RefrescarLista(m_Corpus.FiltroDeIndice(cmbFamilia.Index))
+  SeleccionarCodigo(sCodigo)
+
+  ActualizarBotones()
+
+End
+
+' ============================================
+' Función   : txtTitulo_Change
+' Propósito : Marca la entrada como modificada
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub txtTitulo_Change()
+
+  MarcarModificado()
+
+End
+
+' ============================================
+' Función   : txaCuerpo_Change
+' Propósito : Marca la entrada como modificada
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub txaCuerpo_Change()
+
+  MarcarModificado()
+
+End
+
+' ============================================
+' Función   : txtEntorno_Change
+' Propósito : Marca la entrada como modificada
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub txtEntorno_Change()
+
+  MarcarModificado()
+
+End
+
+' ============================================
+' Función   : txtFecha_Change
+' Propósito : Marca la entrada como modificada
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub txtFecha_Change()
+
+  MarcarModificado()
+
+End
+
+' ============================================
+' Función   : txtRelaciones_Change
+' Propósito : Marca la entrada como modificada
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub txtRelaciones_Change()
+
+  MarcarModificado()
+
+End
+
+' ============================================
+' Función   : txtPendiente_Change
+' Propósito : Marca la entrada como modificada
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub txtPendiente_Change()
+
+  MarcarModificado()
+
+End
+
+' ============================================
+' Función   : cmbEstado_Click
+' Propósito : Marca la entrada como modificada
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub cmbEstado_Click()
+
+  MarcarModificado()
+
+End
+
+' ============================================
+' Función   : cmbEvidencia_Click
+' Propósito : Marca la entrada como modificada
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub cmbEvidencia_Click()
+
+  MarcarModificado()
+
+End
+
+' ============================================
+' Función   : mnuExpDocumental_Click
+' Propósito : Exporta el corpus completo en Markdown
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub mnuExpDocumental_Click()
+
+  m_Exportar.ExportarDocumental()
+
+End
+
+' ============================================
+' Función   : mnuExpOperativo_Click
+' Propósito : Exporta el bloque de reglas vigentes
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub mnuExpOperativo_Click()
+
+  m_Exportar.ExportarOperativo()
+
+End
+
+' ============================================
+' Función   : mnuExpVolcado_Click
+' Propósito : Exporta el volcado SQL restaurable
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub mnuExpVolcado_Click()
+
+  m_Exportar.ExportarVolcado()
+
+End
+
+' ============================================
+' Función   : mnuUbicacion_Click
+' Propósito : Abre en el gestor de archivos la carpeta oculta donde
+'             vive la base, que de otro modo no se ve.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub mnuUbicacion_Click()
+
+  ' --- 1. REQUIERE EL COMPONENTE gb.desktop ---
+  ' SI NO SE QUIERE ESA DEPENDENCIA, EL REEMPLAZO ES
+  ' Exec ["xdg-open", m_Base.CarpetaBase()] CON SU Try / If Error
+  Desktop.Open(m_Base.CarpetaBase())
+
+End
+
+' ============================================
+' Función   : MarcarModificado
+' Propósito : Registra que hay cambios sin guardar, salvo que el cambio
+'             lo haya producido la propia carga de datos.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub MarcarModificado()
+
+  ' --- 1. LOS CAMBIOS DE LA CARGA NO CUENTAN ---
+  If $bCargando Then Return
+  If m_Corpus.CodigoEnCurso = "" Then Return
+
+  ' --- 2. AVISO VISIBLE: EL ESTADO SUCIO NO DEBE SER INVISIBLE ---
+  $bModificado = True
+  lblAviso.Text = "cambios sin guardar"
+
+End
+
+' ============================================
+' Función   : ConfirmarDescartarCambios
+' Propósito : Guard de SC-06. Se invoca ANTES de cualquier cambio de
+'             contexto y antes de tocar la UI.
+' Parámetros: ninguno
+' Retorna   : Boolean — True si se puede continuar
+' ============================================
+Private Function ConfirmarDescartarCambios() As Boolean
+
+  ' --- 1. SIN CAMBIOS, NADA QUE PREGUNTAR ---
+  If Not $bModificado Then Return True
+
+  ' --- 2. DECISIÓN DEL USUARIO ---
+  If Message.Question("La entrada " & m_Corpus.CodigoEnCurso &
+      " tiene cambios sin guardar.", "Descartar", "Cancelar") = 1 Then
+    Return True
+  Endif
+
+  Return False
+
+End
+
+' ============================================
+' Función   : CargarCombosFijos
+' Propósito : Puebla estado y evidencia. Son listas cerradas: si crecen
+'             es porque el modelo estaba mal, no porque el corpus creció.
+'             Por eso viven en el CHECK del esquema y acá, no en una tabla.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub CargarCombosFijos()
+
+  $bCargando = True
+
+  ' --- 1. ESTADOS: LOS CUATRO DEL CHECK DE LA TABLA entradas ---
+  cmbEstado.Clear()
+  cmbEstado.Add("vigente")
+  cmbEstado.Add("corregida")
+  cmbEstado.Add("deprecada")
+  cmbEstado.Add("hipotesis")
+
+  ' --- 2. EVIDENCIA: EL VACÍO ES VÁLIDO Y SIGNIFICA "SIN REGISTRAR" ---
+  cmbEvidencia.Clear()
+  cmbEvidencia.Add("")
+  cmbEvidencia.Add("empirica")
+  cmbEvidencia.Add("doc_oficial")
+  cmbEvidencia.Add("inferida")
+
+  $bCargando = False
+
+End
+
+' ============================================
+' Función   : CargarComboFiltros
+' Propósito : Puebla el combo con los filtros analíticos y las familias
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub CargarComboFiltros()
+
+  Dim aEtiquetas As String[]
+  Dim sEtiqueta As String
+
+  $bCargando = True
+
+  ' --- 1. ETIQUETAS ARMADAS POR EL MÓDULO, QUE ES DUEÑO DEL MAPEO ---
+  aEtiquetas = m_Corpus.CargarFiltros()
+  cmbFamilia.Clear()
+  For Each sEtiqueta In aEtiquetas
+    cmbFamilia.Add(sEtiqueta)
+  Next
+
+  ' --- 2. ARRANQUE EN "TODO EL CORPUS" ---
+  If cmbFamilia.Count > 0 Then cmbFamilia.Index = 0
+  $iFiltroEnCurso = 0
+
+  $bCargando = False
+
+End
+
+' ============================================
+' Función   : RefrescarLista
+' Propósito : Repuebla el ListBox principal con el filtro indicado
+' Parámetros: sFiltro As String — prefijo de familia o token analítico
+' Retorna   : nada
+' ============================================
+Private Sub RefrescarLista(sFiltro As String)
+
+  Dim aLineas As String[]
+  Dim sLinea As String
+
+  $bCargando = True
+
+  ' --- 1. CONSULTA Y VOLCADO ---
+  aLineas = m_Corpus.CargarEntradas(sFiltro)
+  lstEntradas.Clear()
+  For Each sLinea In aLineas
+    lstEntradas.Add(sLinea)
+  Next
+
+  $bCargando = False
+
+  ' --- 2. UNA LISTA VACÍA SE DICE, NO SE DEJA EN SILENCIO (GV-23) ---
+  ' UN RESULTADO VACÍO SIN EXPLICACIÓN SE LEE COMO UNA FALLA
+  If aLineas.Count = 0 Then
+    If sFiltro = m_Corpus.FILTRO_TODAS Then
+      lblAviso.Text = "el corpus está vacío"
+    Else If sFiltro = m_Corpus.FILTRO_PENDIENTES Then
+      lblAviso.Text = "no hay pendientes abiertos"
+    Else If sFiltro = m_Corpus.FILTRO_SIN_VERIFICAR Then
+      lblAviso.Text = "todo el corpus tiene evidencia"
+    Else If sFiltro = m_Corpus.FILTRO_NO_VIGENTES Then
+      lblAviso.Text = "todas las entradas están vigentes"
+    Else
+      lblAviso.Text = "la familia " & sFiltro & " no tiene entradas"
+    Endif
+  Endif
+
+End
+
+' ============================================
+' Función   : RefrescarRelaciones
+' Propósito : Repuebla el ListBox inferior con los vínculos en las dos
+'             direcciones de la entrada en curso.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub RefrescarRelaciones()
+
+  Dim oVinculo As CRelacion
+
+  $bCargando = True
+
+  ' --- 1. RESOLUCIÓN BIDIRECCIONAL EN EL MÓDULO ---
+  lstRelaciones.Clear()
+  $aRelaciones = m_Relaciones.ResolverParaEntrada(m_Corpus.CodigoEnCurso)
+
+  ' --- 2. VOLCADO DE LAS ETIQUETAS YA FORMATEADAS ---
+  For Each oVinculo In $aRelaciones
+    lstRelaciones.Add(oVinculo.sEtiqueta)
+  Next
+
+  ' --- 3. EL CONTADOR EN EL RÓTULO EVITA TENER QUE CONTAR A OJO ---
+  lblRelaciones.Text = "Relaciones (" & CStr($aRelaciones.Count) & ")"
+
+  $bCargando = False
+
+End
+
+' ============================================
+' Función   : MostrarEntrada
+' Propósito : Vuelca una entrada al panel de detalle. No toca el
+'             historial: eso es responsabilidad de quien navega.
+' Parámetros: sCodigo As String — código de la entrada
+' Retorna   : nada
+' ============================================
+Private Sub MostrarEntrada(sCodigo As String)
+
+  Dim oEntrada As CEntrada
+
+  ' --- 1. LECTURA ---
+  oEntrada = m_Corpus.LeerEntrada(sCodigo)
+  If IsNull(oEntrada) Then
+    Message.Warning("No se encontró la entrada " & sCodigo & ".")
+    Return
+  Endif
+
+  ' --- 2. ESTADO DE SESIÓN EN EL MÓDULO, NO EN LOS CONTROLES (RC-GM-16) ---
+  m_Corpus.CodigoEnCurso = oEntrada.sCodigo
+  m_Corpus.PrefijoEnCurso = oEntrada.sPrefijo
+
+  ' --- 3. VOLCADO A LA UI, CON LOS EVENTOS SUPRIMIDOS ---
+  $bCargando = True
+
+  txtCodigo.Text = oEntrada.sCodigo
+  txtTitulo.Text = oEntrada.sTitulo
+  txaCuerpo.Text = oEntrada.sCuerpo
+  cmbEstado.Text = oEntrada.sEstado
+  cmbEvidencia.Text = oEntrada.sEvidencia
+  txtEntorno.Text = oEntrada.sEntorno
+  txtFecha.Text = oEntrada.sFechaVerificacion
+  txtRelaciones.Text = oEntrada.sRelaciones
+  txtPendiente.Text = oEntrada.sPendiente
+
+  ' EL CUERPO PUEDE SER LARGO: MOSTRARLO DESDE EL PRINCIPIO
+  txaCuerpo.Pos = 0
+
+  $bCargando = False
+
+  ' --- 4. LIMPIEZA DE ESTADO Y VÍNCULOS ---
+  $bModificado = False
+  lblAviso.Text = ""
+  RefrescarRelaciones()
+  ActualizarBotones()
+
+End
+
+' ============================================
+' Función   : SeleccionarCodigo
+' Propósito : Lleva la selección del ListBox principal a un código dado,
+'             abriendo el filtro si la entrada no está visible.
+' Parámetros: sCodigo As String — código destino
+' Retorna   : nada
+' ============================================
+Private Sub SeleccionarCodigo(sCodigo As String)
+
+  Dim iIndice As Integer
+
+  ' --- 1. BÚSQUEDA EN LA LISTA ACTUAL ---
+  iIndice = m_Corpus.IndiceDeCodigo(sCodigo)
+
+  ' --- 2. SI EL FILTRO LA ESCONDE, SE ABRE A TODO EL CORPUS ---
+  ' PASA AL SALTAR POR UNA RELACIÓN HACIA OTRA FAMILIA, Y TAMBIÉN AL
+  ' GUARDAR UNA ENTRADA QUE DEJA DE CUMPLIR UN FILTRO ANALÍTICO
+  If iIndice < 0 Then
+    $bCargando = True
+    cmbFamilia.Index = 0
+    $bCargando = False
+    $iFiltroEnCurso = 0
+    RefrescarLista(m_Corpus.FILTRO_TODAS)
+    iIndice = m_Corpus.IndiceDeCodigo(sCodigo)
+  Endif
+
+  If iIndice < 0 Then
+    Message.Warning("No se pudo ubicar " & sCodigo & " en la lista.")
+    Return
+  Endif
+
+  ' --- 3. SELECCIÓN SIN DISPARAR EL HANDLER DEL LISTBOX ---
+  $bCargando = True
+  lstEntradas.Index = iIndice
+  $bCargando = False
+
+  MostrarEntrada(sCodigo)
+
+End
+
+' ============================================
+' Función   : RestaurarSeleccionEntrada
+' Propósito : Devuelve el ListBox a la entrada en curso cuando el
+'             usuario cancela el descarte de cambios.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub RestaurarSeleccionEntrada()
+
+  Dim iIndice As Integer
+
+  ' --- 1. LA ENTRADA EN CURSO PUEDE NO ESTAR EN LA LISTA ACTUAL ---
+  iIndice = m_Corpus.IndiceDeCodigo(m_Corpus.CodigoEnCurso)
+  If iIndice < 0 Then Return
+
+  ' --- 2. RESTAURACIÓN SIN DISPARAR EL HANDLER ---
+  $bCargando = True
+  lstEntradas.Index = iIndice
+  $bCargando = False
+
+End
+
+' ============================================
+' Función   : RestaurarSeleccionFiltro
+' Propósito : Devuelve el combo al filtro que estaba aplicado cuando el
+'             usuario cancela el descarte de cambios.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub RestaurarSeleccionFiltro()
+
+  ' --- 1. GUARDA DE RANGO: EL COMBO PUDO RECARGARSE ---
+  If $iFiltroEnCurso < 0 Then Return
+  If $iFiltroEnCurso >= cmbFamilia.Count Then Return
+
+  ' --- 2. RESTAURACIÓN SIN DISPARAR EL HANDLER ---
+  ' SE USA EL ÍNDICE RECORDADO Y NO LA FAMILIA DE LA ENTRADA EN CURSO:
+  ' CON UN FILTRO ANALÍTICO NO HAY FAMILIA DE LA CUAL DERIVARLO
+  $bCargando = True
+  cmbFamilia.Index = $iFiltroEnCurso
+  $bCargando = False
+
+End
+
+' ============================================
+' Función   : LimpiarDetalle
+' Propósito : Deja el panel derecho vacío y sin entrada en curso
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub LimpiarDetalle()
+
+  ' --- 1. BLANQUEO DE CONTROLES, SIN LEVANTAR EVENTOS ---
+  $bCargando = True
+
+  txtCodigo.Text = ""
+  txtTitulo.Text = ""
+  txaCuerpo.Text = ""
+  cmbEstado.Index = 0
+  cmbEvidencia.Index = 0
+  txtEntorno.Text = ""
+  txtFecha.Text = ""
+  txtRelaciones.Text = ""
+  txtPendiente.Text = ""
+  lstRelaciones.Clear()
+  lblRelaciones.Text = "Relaciones de la entrada"
+
+  $bCargando = False
+
+  ' --- 2. BLANQUEO DEL ESTADO ---
+  ' lblAviso NO SE TOCA: PUEDE TRAER EL MENSAJE DE LISTA VACÍA QUE
+  ' RefrescarLista ACABA DE ESCRIBIR
+  $aRelaciones = New CRelacion[]
+  $bModificado = False
+  m_Corpus.CodigoEnCurso = ""
+  m_Corpus.PrefijoEnCurso = ""
+
+End
+
+' ============================================
+' Función   : ActualizarBotones
+' Propósito : Habilita o deshabilita según haya entrada en curso e
+'             historial de navegación.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub ActualizarBotones()
+
+  ' --- 1. GUARDAR SOLO CON UNA ENTRADA ABIERTA ---
+  btnGuardar.Enabled = (m_Corpus.CodigoEnCurso <> "")
+
+  ' --- 2. VOLVER SOLO CON HISTORIAL DE SALTOS ---
+  btnAtras.Enabled = ($aHistorial.Count > 0)
+
+End
+
+' ============================================
+' Función   : hspPrincipal_Resize
+' Propósito : Repone la proporción de los paneles después de cualquier
+'             redimensionado. Es la única forma de impedir que se
+'             modifique el reparto: HSplit no tiene una propiedad que
+'             bloquee el arrastre (verificado en Gambas 3.22).
+'             Si alguna vez se acepta el ancho izquierdo fijo en lugar
+'             del ratio, el reemplazo correcto es cambiar el HSplit por
+'             un HBox y borrar esta función.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub hspPrincipal_Resize()
+
+  ' --- 1. UN TERCIO PARA LA LISTA, DOS PARA EL DETALLE ---
+  hspPrincipal.Layout = [1, 2]
+
+End

@@ -1,0 +1,14 @@
+' Gambas class file
+
+' ============================================
+' Clase     : CRelacion
+' Propósito : Un vínculo entre dos entradas, ya resuelto contra la base
+'             y con la etiqueta armada para el ListBox.
+' ============================================
+
+Public sTipo As String        ' apoya, contracara, reemplaza, vinculo...
+Public sCodigo As String      ' CÓDIGO DE LA ENTRADA DEL OTRO EXTREMO
+Public sTitulo As String
+Public bInversa As Boolean    ' TRUE SI ES OTRA ENTRADA LA QUE NOS APUNTA
+Public bRota As Boolean       ' TRUE SI EL CÓDIGO NO EXISTE EN LA BASE
+Public sEtiqueta As String    ' LÍNEA YA FORMATEADA PARA EL LISTBOX
