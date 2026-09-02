@@ -187,7 +187,7 @@ interfaz.
 
 ## Licencia
 
-GPL v3. Ver [LICENSE](LICENSE).
+[GPL v3](https://www.gnu.org/licenses/gpl-3.0.html). Ver [LICENSE](LICENSE).
 
 La licencia cubre el código de gbCorpus. El contenido del corpus de
 gbpublisher no forma parte de este repositorio.
