@@ -129,10 +129,17 @@ un `LIKE`: `GV-2` matchearía dentro de `GV-24`.
 ## Instalación
 
 Requiere Gambas 3.21 o superior sobre Linux. Desarrollado y probado en
-Linux Mint Cinnamon con X11.
+Linux Mint Cinnamon con X11. Componentes del proyecto:
 
-Componentes del proyecto: `gb.form`, `gb.db`, `gb.db.sqlite3`,
-`gb.settings` y `gb.desktop`.
+- `gb.db2`
+- `gb.db2.sqlite3`
+- `gb.desktop`
+- `gb.form`
+- `gb.form.dialog`
+- `gb.image`
+- `gb.qt5`
+- `gb.qt5.ext`
+- `gb.settings`
 
 Abrir el proyecto en el IDE de Gambas, **Proyecto → Limpiar**, luego
 **Proyecto → Compilar**. En el primer arranque la aplicación crea
