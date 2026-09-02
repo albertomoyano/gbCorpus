@@ -191,3 +191,8 @@ GPL v3. Ver [LICENSE](LICENSE).
 
 La licencia cubre el código de gbCorpus. El contenido del corpus de
 gbpublisher no forma parte de este repositorio.
+
+---
+
+
+![Ventana principal de gbCorpus](captura.png)
