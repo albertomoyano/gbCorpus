@@ -800,3 +800,9 @@ Public Sub hspPrincipal_Resize()
   hspPrincipal.Layout = [1, 2]
 
 End
+
+Public Sub btnCerrar_Click()
+
+  Me.Close
+
+End

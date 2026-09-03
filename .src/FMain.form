@@ -1,9 +1,11 @@
 # Gambas Form File 3.0
 
 { Form Form
-  MoveScaled(0,0,190,76)
+  Move(0,0,1413,684)
+  #Scaled = False
   Expand = True
   Text = ("Corpus normativo")
+  Resizable = False
   Maximized = True
   Arrangement = Arrange.Horizontal
   Spacing = True
@@ -27,176 +29,181 @@
     }
   }
   { hspPrincipal Splitter
-    MoveScaled(1,1,190,69)
+    Move(-90,0,1476,621)
     Expand = True
     Border = False
     { vbxIzquierda VBox
-      MoveScaled(1,6,44,62)
+      Move(9,54,396,558)
       Expand = True
       Spacing = True
       Margin = True
       Padding = 4
       { cmbFamilia ComboBox
-        MoveScaled(6,3,29,4)
+        Move(54,27,261,36)
         ToolTip = ("Filtrar el corpus por familia")
         ReadOnly = True
       }
       { lstEntradas ListBox
-        MoveScaled(5,9,28,17)
+        Move(45,81,252,153)
         Font = Font["Noto Mono"]
         Expand = True
       }
       { lblRelaciones Label
-        MoveScaled(6,30,30,4)
+        Move(54,270,270,36)
         Text = ("Relaciones de la entrada")
       }
       { lstRelaciones ListBox
-        MoveScaled(5,36,38,18)
+        Move(45,324,342,162)
         Font = Font["Noto Mono"]
         ToolTip = ("→ declaradas por esta entrada · ← entradas que la apuntan")
         Expand = True
       }
       { btnAtras Button
-        MoveScaled(4,57,16,4)
+        Move(36,513,144,36)
         Text = ("Volver")
         Picture = Picture["iconos/undo.png"]
       }
     }
     { vbxDerecha VBox
-      MoveScaled(46,1,126,67)
+      Move(414,9,1053,603)
       Expand = True
       Spacing = True
       Margin = True
       Padding = 4
       { hbxCabecera HBox
-        MoveScaled(0,0,80,4)
+        Move(0,0,720,36)
         Spacing = True
         { lblCodigo Label
-          MoveScaled(0,0,16,4)
+          Move(0,0,144,36)
           Alignment = Align.Right
           Text = ("Código:")
         }
         { txtCodigo TextBox
-          MoveScaled(18,0,16,4)
+          Move(162,0,144,36)
           Background = Color.Background
           Foreground = &H0000FF
           ReadOnly = True
         }
       }
       { hbxCabecera2 HBox
-        MoveScaled(0,4,80,4)
+        Move(0,36,720,36)
         Spacing = True
         { lblTitulo Label
-          MoveScaled(0,0,16,4)
+          Move(0,0,144,36)
           Alignment = Align.Right
           Text = ("Título:")
         }
         { txtTitulo TextBox
-          MoveScaled(20,0,16,4)
+          Move(180,0,144,36)
           Expand = True
         }
       }
       { hbxMeta HBox
-        MoveScaled(0,8,116,4)
+        Move(0,72,1044,36)
         Spacing = True
         { lblEstado Label
-          MoveScaled(1,0,16,4)
+          Move(9,0,144,36)
           Alignment = Align.Right
           Text = ("Estado:")
         }
         { cmbEstado ComboBox
-          MoveScaled(18,0,16,4)
+          Move(162,0,144,36)
           ReadOnly = True
         }
         { lblEvidencia Label
-          MoveScaled(36,0,16,4)
+          Move(324,0,144,36)
           Alignment = Align.Right
           Text = ("Evidencia:")
         }
         { cmbEvidencia ComboBox
-          MoveScaled(53,0,16,4)
+          Move(477,0,144,36)
           ReadOnly = True
         }
         { lblFecha Label
-          MoveScaled(72,0,16,4)
+          Move(648,0,144,36)
           Alignment = Align.Right
           Text = ("Verificado el:")
         }
         { txtFecha TextBox
-          MoveScaled(89,0,16,4)
+          Move(801,0,144,36)
           ToolTip = ("Formato ISO: aaaa-mm-dd")
         }
         { Spring1 Spring
-          MoveScaled(108,0,4,4)
+          Move(972,0,36,36)
         }
       }
       { hbxEntorno HBox
-        MoveScaled(0,12,80,4)
+        Move(0,108,720,36)
         Spacing = True
         { lblEntorno Label
-          MoveScaled(0,0,16,4)
+          Move(0,0,144,36)
           Alignment = Align.Right
           Text = ("Entorno:")
         }
         { txtEntorno TextBox
-          MoveScaled(19,0,40,4)
+          Move(171,0,360,36)
           ToolTip = ("Dónde se verificó: versión, componente, locale")
           Expand = True
         }
       }
       { txaCuerpo TextArea
-        MoveScaled(0,17,48,19)
+        Move(0,153,432,171)
         Font = Font["Noto Mono"]
         Expand = True
         Wrap = True
       }
       { hbxRelaciones HBox
-        MoveScaled(1,45,80,4)
+        Move(9,405,720,36)
         Spacing = True
         { lblCampoRel Label
-          MoveScaled(0,0,16,4)
+          Move(0,0,144,36)
           Alignment = Align.Right
           Text = ("Relaciones:")
         }
         { txtRelaciones TextBox
-          MoveScaled(21,0,23,4)
+          Move(189,0,207,36)
           ToolTip = ("tipo:CODIGO separados por coma. Ej: apoya:GV-24, contracara:GV-25")
           Expand = True
         }
       }
       { hbxPendiente HBox
-        MoveScaled(1,49,80,4)
+        Move(9,441,720,36)
         Spacing = True
         { lblCampoPend Label
-          MoveScaled(0,0,16,4)
+          Move(0,0,144,36)
           Alignment = Align.Right
           Text = ("Pendiente:")
         }
         { txtPendiente TextBox
-          MoveScaled(21,0,23,4)
+          Move(189,0,207,36)
           ToolTip = ("Qué falta verificar o revisar en esta entrada")
           Expand = True
         }
       }
       { hbxPendiente2 HBox
-        MoveScaled(1,53,80,4)
+        Move(9,477,720,36)
         Spacing = True
         { lblAviso Label
-          MoveScaled(0,0,19,4)
+          Move(0,0,171,36)
           Expand = True
           Alignment = Align.Center
         }
       }
       { hbxBotones HBox
-        MoveScaled(1,57,80,4)
+        Move(9,513,720,36)
         Spacing = True
-        { Spring2 Spring
-          MoveScaled(48,0,4,4)
-        }
         { btnGuardar Button
-          MoveScaled(58,0,16,4)
+          Move(9,0,144,36)
           Text = ("Guardar")
           Picture = Picture["iconos/guardar.png"]
+        }
+        { Spring2 Spring
+          Move(261,0,36,36)
+        }
+        { btnCerrar Button
+          Move(477,0,144,36)
+          Text = ("Cerrar")
+          Picture = Picture["iconos/salir.png"]
         }
       }
     }
