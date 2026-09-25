@@ -1,7 +1,7 @@
 # Gambas Form File 3.0
 
 { Form Form
-  Move(0,0,1413,684)
+  Move(0,0,1062,684)
   #Scaled = False
   Expand = True
   Text = ("Corpus normativo")
@@ -24,36 +24,41 @@
     }
     { mnuSep1 Menu
     }
+    { mnuImpSQL Menu
+      Text = ("Importar UPDATE SQL")
+    }
+    { mnuSep2 Menu
+    }
     { mnuUbicacion Menu
       Text = ("Ubicación de la base")
     }
   }
   { hspPrincipal Splitter
-    Move(-90,0,1476,621)
+    Move(9,0,1476,621)
     Expand = True
     Border = False
     { vbxIzquierda VBox
-      Move(9,54,396,558)
+      Move(9,54,279,558)
       Expand = True
       Spacing = True
       Margin = True
       Padding = 4
       { cmbFamilia ComboBox
-        Move(54,27,261,36)
+        Move(9,18,261,36)
         ToolTip = ("Filtrar el corpus por familia")
         ReadOnly = True
       }
       { lstEntradas ListBox
-        Move(45,81,252,153)
+        Move(9,99,252,153)
         Font = Font["Noto Mono"]
         Expand = True
       }
       { lblRelaciones Label
-        Move(54,270,270,36)
+        Move(9,270,270,36)
         Text = ("Relaciones de la entrada")
       }
       { lstRelaciones ListBox
-        Move(45,324,342,162)
+        Move(9,315,252,162)
         Font = Font["Noto Mono"]
         ToolTip = ("→ declaradas por esta entrada · ← entradas que la apuntan")
         Expand = True
@@ -65,7 +70,7 @@
       }
     }
     { vbxDerecha VBox
-      Move(414,9,1053,603)
+      Move(297,9,738,603)
       Expand = True
       Spacing = True
       Margin = True
@@ -146,14 +151,31 @@
           Expand = True
         }
       }
-      { txaCuerpo TextArea
-        Move(0,153,432,171)
-        Font = Font["Noto Mono"]
+      { tabDetalle TabStrip
+        Move(18,153,342,162)
         Expand = True
-        Wrap = True
+        Arrangement = Arrange.Fill
+        Spacing = True
+        Margin = True
+        Padding = 4
+        Count = 2
+        Index = 0
+        Text = ("Texto")
+        { txaCuerpo TextArea
+          Move(9,27,261,81)
+          Font = Font["Noto Mono"]
+          Expand = True
+          Wrap = True
+        }
+        Index = 1
+        Text = ("Terminal")
+        { trmImportar TerminalView
+          Move(18,18,279,144)
+        }
+        Index = 0
       }
       { hbxRelaciones HBox
-        Move(9,405,720,36)
+        Move(9,315,720,36)
         Spacing = True
         { lblCampoRel Label
           Move(0,0,144,36)
@@ -167,21 +189,22 @@
         }
       }
       { hbxPendiente HBox
-        Move(9,441,720,36)
+        Move(9,351,720,144)
         Spacing = True
         { lblCampoPend Label
           Move(0,0,144,36)
           Alignment = Align.Right
           Text = ("Pendiente:")
         }
-        { txtPendiente TextBox
-          Move(189,0,207,36)
-          ToolTip = ("Qué falta verificar o revisar en esta entrada")
+        { txtPendiente TextArea
+          Move(189,0,108,90)
           Expand = True
+          Wrap = True
+          ScrollBar = Scroll.Vertical
         }
       }
       { hbxPendiente2 HBox
-        Move(9,477,720,36)
+        Move(9,522,720,36)
         Spacing = True
         { lblAviso Label
           Move(0,0,171,36)
@@ -190,7 +213,7 @@
         }
       }
       { hbxBotones HBox
-        Move(9,513,720,36)
+        Move(9,558,720,36)
         Spacing = True
         { btnGuardar Button
           Move(9,0,144,36)

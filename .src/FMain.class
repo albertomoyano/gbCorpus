@@ -29,6 +29,26 @@ Private $aHistorial As New String[]
 ' CUANDO EL USUARIO CANCELA UN DESCARTE DE CAMBIOS.
 Private $iFiltroEnCurso As Integer
 
+' --- IMPORTACIÓN EN CURSO ---
+' MIENTRAS EL IMPORTADOR CORRE, LA SENTENCIA Wait DEJA VIVOS LOS EVENTOS
+' DE LA INTERFAZ (GV-17) Y LA BASE ESTÁ CERRADA. LA BANDERA BLOQUEA EL
+' RELANZAMIENTO; EL APAGADO DE hspPrincipal BLOQUEA TODO LO DEMÁS
+Private $bImportando As Boolean
+Private $hImportacion As Process
+
+' --- PLAZO MÁXIMO DE LA IMPORTACIÓN ---
+' NO PUEDE SER CORTO: LA ESPERA INCLUYE AL USUARIO LEYENDO LA CABECERA
+' DEL SCRIPT Y CONTESTANDO EL PROMPT [s/N] EN EL TERMINAL
+Private Const SEGUNDOS_MAXIMOS As Float = 900.0
+
+' --- UBICACIÓN DEL IMPORTADOR DENTRO DEL PROYECTO ---
+Private Const RUTA_IMPORTADOR As String = "engine/importar_corpus.sh"
+
+' CARPETA DE RECURSOS DEL SISTEMA. engine/ ES INFRAESTRUCTURA Y NO SE
+' PERSONALIZA: VIAJA EN EL .deb JUNTO AL BINARIO Y NO SE COPIA A ~/.gbcorpus,
+' PARA QUE NO PUEDA DESINCRONIZARSE (SC-11).
+Private Const CARPETA_SISTEMA As String = "/usr/share/gbcorpus"
+
 ' ============================================
 ' Función   : Form_Open
 ' Propósito : Arranque en orden fail-fast: infraestructura, configuración,
@@ -60,7 +80,14 @@ Public Sub Form_Open()
   CargarComboFiltros()
   RefrescarLista(m_Corpus.FILTRO_TODAS)
 
-  ' --- 6. ESTADO INICIAL DE CONTROLES ---
+  ' --- 6. ASPECTO DEL TERMINAL: EXPLÍCITO, NO HEREDADO ---
+  ' SI SE DEJA EN «FUENTE POR DEFECTO», QT SINTETIZA EL BOLD Y SE VE MAL
+  trmImportar.Font.Name = "IBM Plex Mono"
+  trmImportar.Font.Size = 12
+  trmImportar.Background = Color.RGB(45, 30, 20)      ' MARRÓN OSCURO
+  trmImportar.Foreground = Color.RGB(230, 220, 210)
+
+  ' --- 7. ESTADO INICIAL DE CONTROLES ---
   LimpiarDetalle()
   ActualizarBotones()
 
@@ -75,13 +102,32 @@ End
 ' ============================================
 Public Sub Form_Close()
 
-  ' --- 1. GUARD: LA SALIDA ES UN CAMBIO DE CONTEXTO MÁS ---
+  ' --- 1. IMPORTACIÓN EN CURSO: SE OFRECE INTERRUMPIRLA ---
+  ' NEGARSE A SECAS DEJA AL USUARIO ENCERRADO SI EL IMPORTADOR SE COLGÓ.
+  ' MATAR EL PROCESO ES SEGURO: sqlite3 MUERE CON LA TRANSACCIÓN ABIERTA
+  ' Y SQLITE LA DESHACE AL CERRARSE LA CONEXIÓN. EL BUCLE DE ESPERA VE
+  ' QUE EL PROCESO TERMINÓ Y LA BASE SE REABRE POR EL CAMINO NORMAL
+  If $bImportando Then
+    If Message.Question("Hay una importación en curso." & Chr(10) & Chr(10) &
+        "Interrumpirla deshace la transacción: el corpus queda como estaba.",
+        "Interrumpir", "Seguir esperando") = 1 Then
+      Try $hImportacion.Kill()
+    Endif
+    Stop Event
+    Return
+  Endif
+
+  ' --- 2. GUARD: LA SALIDA ES UN CAMBIO DE CONTEXTO MÁS ---
   If Not ConfirmarDescartarCambios() Then
     Stop Event
     Return
   Endif
 
-  ' --- 2. LIBERACIÓN EXPLÍCITA: NO SE DELEGA EN Finally (RC-GM-20) ---
+  ' --- 3. EL TerminalView NO MUERE CON EL FORMULARIO ---
+  ' SIN ESTO QUEDA UN bash HUÉRFANO DESPUÉS DE CERRAR LA APLICACIÓN
+  Try trmImportar.Kill()
+
+  ' --- 4. LIBERACIÓN EXPLÍCITA: NO SE DELEGA EN Finally (RC-GM-20) ---
   Settings.Write(Me)
   m_Base.Cerrar()
 
@@ -427,6 +473,319 @@ Public Sub mnuUbicacion_Click()
   ' SI NO SE QUIERE ESA DEPENDENCIA, EL REEMPLAZO ES
   ' Exec ["xdg-open", m_Base.CarpetaBase()] CON SU Try / If Error
   Desktop.Open(m_Base.CarpetaBase())
+
+End
+
+' ============================================
+' Función   : mnuImpSQL_Click
+' Propósito : Aplica un script SQL sobre el corpus. La aplicación no
+'             redacta el script ni lo interpreta: lo ejecuta el
+'             importador de engine/, que es quien sabe parsear SQL.
+'             Acá se decide cuándo, con qué archivo, y qué hacer con
+'             la interfaz antes y después.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub mnuImpSQL_Click()
+
+  Dim sImportador As String
+  Dim sArchivo As String
+  Dim bAplicado As Boolean
+
+  ' --- 1. GUARD DE REENTRADA ---
+  ' Wait DEJA VIVOS LOS EVENTOS: SIN ESTO, UN SEGUNDO CLICK EN EL MENÚ
+  ' LANZA OTRA IMPORTACIÓN Y EL CONTROL RESPONDE "terminal already in use"
+  If $bImportando Then Return
+
+  ' --- 2. GUARD DE CAMBIOS SIN GUARDAR (SC-06) ---
+  ' VA ANTES DE TOCAR NADA: DESPUÉS DE CERRAR LA BASE YA NO HAY DÓNDE
+  ' GUARDAR LO QUE EL USUARIO TENGA A MEDIO EDITAR
+  If Not ConfirmarDescartarCambios() Then Return
+
+  ' --- 3. EL IMPORTADOR TIENE QUE ESTAR DONDE SE LO ESPERA ---
+  sImportador = RutaImportador()
+  If sImportador = "" Then Return
+
+  ' --- 4. ELECCIÓN DEL ARCHIVO ---
+  sArchivo = ElegirScriptSQL()
+  If sArchivo = "" Then Return
+
+  ' --- 5. EJECUCIÓN EN EL TERMINAL EMBEBIDO ---
+  bAplicado = EjecutarImportacion(sImportador, sArchivo)
+
+  ' --- 6. REAPERTURA Y RECARGA ---
+  ' SE INVOCA SIEMPRE, HAYA SALIDO BIEN O MAL: ES EL ÚNICO CAMINO QUE
+  ' REABRE LA BASE, Y Finally NO SIRVE PARA ESTO (RC-GM-20)
+  RecargarTrasImportar(bAplicado)
+
+End
+
+' ============================================
+' Función   : RutaImportador
+' Propósito : Ubica el script importador y confirma que está. Busca primero en
+'             la instalación del sistema y después en la carpeta del proyecto,
+'             para que el mismo código sirva instalado y desde el IDE.
+' Parámetros: ninguno
+' Retorna   : String — ruta absoluta, o cadena vacía si no está
+' ============================================
+Private Function RutaImportador() As String
+
+  Dim sRutaSistema As String
+  Dim sRutaProyecto As String
+
+  ' --- 1. INSTALACIÓN DEL SISTEMA, QUE ES LA FUENTE DE VERDAD (SC-11) ---
+  sRutaSistema = CARPETA_SISTEMA &/ RUTA_IMPORTADOR
+
+  If Exist(sRutaSistema) Then Return sRutaSistema
+
+  ' --- 2. EJECUCIÓN DESDE EL IDE ---
+  ' Application.Path NO PUEDE SER LA VÍA PRINCIPAL: DEVUELVE LA CARPETA DEL
+  ' PROYECTO EN DESARROLLO, PERO /usr/bin CON EL PAQUETE INSTALADO, QUE ES
+  ' DONDE VIVE EL EJECUTABLE .gambas. EL SÍNTOMA ES «no se encontró el
+  ' importador: /usr/bin/engine/...».
+  sRutaProyecto = Application.Path &/ RUTA_IMPORTADOR
+
+  If Exist(sRutaProyecto) Then Return sRutaProyecto
+
+  ' --- 3. AUSENCIA: SE DICE CON LAS DOS RUTAS A LA VISTA ---
+  ' UN "no se pudo importar" SIN LAS RUTAS OBLIGA A ADIVINAR DÓNDE MIRÓ
+  m_Sonido_Error()
+  Message.Error("No se encontró el importador. Se buscó en:" & Chr(10) & Chr(10) &
+    sRutaSistema & Chr(10) & sRutaProyecto)
+
+  Return ""
+
+End
+
+' ============================================
+' Función   : ElegirScriptSQL
+' Propósito : Pide el archivo .sql a importar, recordando la carpeta
+' Parámetros: ninguno
+' Retorna   : String — ruta elegida, o cadena vacía si se canceló
+' ============================================
+Private Function ElegirScriptSQL() As String
+
+  Dim sElegido As String
+
+  ' --- 1. DIÁLOGO, CON LA ÚLTIMA CARPETA COMO PUNTO DE PARTIDA ---
+  Dialog.Title = "Importar script SQL"
+  Dialog.Filter = ["*.sql", "SQL"]
+  Dialog.Path = Settings["Importar/UltimaCarpeta", User.Home]
+
+  ' ATENCIÓN: LOS DIÁLOGOS DE GAMBAS DEVUELVEN True AL CANCELAR (GV-16)
+  If Dialog.OpenFile() Then Return ""
+
+  sElegido = Dialog.Path
+  If sElegido = "" Then Return ""
+
+  ' --- 2. MEMORIA DE LA CARPETA PARA LA PRÓXIMA IMPORTACIÓN ---
+  Settings["Importar/UltimaCarpeta"] = File.Dir(sElegido)
+
+  Return sElegido
+
+End
+
+' ============================================
+' Función   : EjecutarImportacion
+' Propósito : Bloquea la interfaz, cierra la base, lanza el importador
+'             en el TerminalView y espera a que termine.
+'             La base SE CIERRA porque sqlite3 necesita el lock de
+'             escritura del archivo: con dos conexiones vivas sobre el
+'             mismo .sqlite el import falla con "database is locked".
+' Parámetros: sImportador As String — ruta del script de engine/
+'             sArchivo As String — ruta del .sql a aplicar
+' Retorna   : Boolean — True si el importador devolvió código 0
+' ============================================
+Private Function EjecutarImportacion(sImportador As String, sArchivo As String) As Boolean
+
+  Dim hProceso As Process
+  Dim bAplicado As Boolean
+
+  ' --- 1. BLOQUEO DE LA INTERFAZ ---
+  ' NO ALCANZA CON LA BANDERA: DURANTE EL Wait EL USUARIO PUEDE HACER
+  ' CLICK EN lstEntradas, Y ESE HANDLER CONSULTA UNA BASE QUE NO ESTÁ
+  $bImportando = True
+  BloquearInterfaz(True)
+  lblAviso.Text = "importación en curso"
+
+  ' --- 2. LA PESTAÑA DEL TERMINAL AL FRENTE ---
+  ' SIN ESTO LA IMPORTACIÓN CORRE A CIEGAS DETRÁS DE LA PESTAÑA Texto,
+  ' Y EL PROMPT [s/N] DEL IMPORTADOR NO SE VE
+  tabDetalle.Index = 1
+
+  ' --- 3. CIERRE DE LA BASE ---
+  m_Base.Cerrar()
+
+  ' --- 4. LANZAMIENTO CON ARRAY, NUNCA Shell (SC-05) ---
+  ' LA RUTA VIENE DE UN DIÁLOGO Y PUEDE TRAER ESPACIOS. SE INVOCA POR
+  ' bash Y NO DIRECTO, PARA NO DEPENDER DEL BIT DE EJECUCIÓN
+  bAplicado = False
+
+  Try hProceso = trmImportar.Exec(["bash", sImportador, sArchivo])
+  If Error Then
+    m_Sonido_Error()
+    Message.Error("No se pudo lanzar el importador." & Chr(10) &
+      "Verificar que el componente gb.form.terminal esté en el proyecto." &
+      Chr(10) & Error.Text)
+  Else
+    $hImportacion = hProceso
+
+    ' EL PROMPT [s/N] SE CONTESTA EN EL TERMINAL: SIN FOCO NO SE PUEDE
+    ' ESCRIBIR AHÍ (RC-GM-07)
+    trmImportar.SetFocus()
+
+    bAplicado = EsperarProceso(hProceso)
+    $hImportacion = Null
+  Endif
+
+  ' --- 5. DESBLOQUEO ---
+  $bImportando = False
+  BloquearInterfaz(False)
+
+  Return bAplicado
+
+End
+
+' ============================================
+' Función   : BloquearInterfaz
+' Propósito : Apaga o enciende los controles que no deben usarse
+'             mientras corre el importador.
+'
+'             CUIDADO CON EL ÁRBOL DE CONTENEDORES: trmImportar cuelga
+'             de tabDetalle, que cuelga de vbxDerecha, que cuelga de
+'             hspPrincipal. Apagar cualquiera de esos tres apaga TAMBIÉN
+'             el terminal, y un terminal apagado no recibe teclado: el
+'             importador se queda esperando una respuesta al prompt
+'             [s/N] que no puede llegar nunca, y la aplicación parece
+'             colgada. Por eso el apagado va contenedor por contenedor.
+'
+'             txaCuerpo queda vivo a propósito: no toca la base, y lo
+'             que se escriba ahí lo limpia la recarga posterior.
+' Parámetros: bBloquear As Boolean — True apaga, False enciende
+' Retorna   : nada
+' ============================================
+Private Sub BloquearInterfaz(bBloquear As Boolean)
+
+  Dim bActivo As Boolean
+
+  ' --- 1. EL VALOR QUE VA A LOS CONTROLES ES EL INVERSO ---
+  bActivo = Not bBloquear
+
+  ' --- 2. PANEL IZQUIERDO ENTERO: LISTAS, FILTRO Y NAVEGACIÓN ---
+  vbxIzquierda.Enabled = bActivo
+
+  ' --- 3. CAMPOS DEL DETALLE, UNO POR CONTENEDOR ---
+  hbxCabecera.Enabled = bActivo
+  hbxCabecera2.Enabled = bActivo
+  hbxMeta.Enabled = bActivo
+  hbxEntorno.Enabled = bActivo
+  hbxRelaciones.Enabled = bActivo
+  hbxPendiente.Enabled = bActivo
+  hbxBotones.Enabled = bActivo
+
+  ' --- 4. MENÚ: IMPIDE RELANZAR Y EXPORTAR CON LA BASE CERRADA ---
+  mnuCorpus.Enabled = bActivo
+
+End
+
+' ============================================
+' Función   : EsperarProceso
+' Propósito : Espera a que el importador termine, usando la SENTENCIA
+'             Wait y no Process.Wait(): mientras se ejecuta un
+'             procedimiento el intérprete no entra al bucle de eventos,
+'             así que Process.Wait() colgaría la aplicación (GV-17).
+' Parámetros: hProceso As Process — proceso devuelto por Exec
+' Retorna   : Boolean — True si terminó con código de salida 0
+' ============================================
+Private Function EsperarProceso(hProceso As Process) As Boolean
+
+  Dim fVencimiento As Float
+  Dim iCodigo As Integer
+
+  ' --- 1. PLAZO: NO ES OPCIONAL, UN PROCESO PUEDE COLGARSE ---
+  fVencimiento = Timer + SEGUNDOS_MAXIMOS
+
+  ' --- 2. SONDEO ---
+  While hProceso.State = Process.Running
+
+    Wait 0.05
+
+    If Timer > fVencimiento Then
+      Try hProceso.Kill()
+      m_Sonido_Error()
+      Message.Error("La importación superó el plazo de " &
+        CStr(CInt(SEGUNDOS_MAXIMOS / 60)) & " minutos y se interrumpió." & Chr(10) &
+        "La transacción no se confirmó: el corpus quedó como estaba.")
+      Return False
+    Endif
+
+  Wend
+
+  ' --- 3. LOS ÚLTIMOS TROZOS DE SALIDA PUEDEN LLEGAR DESPUÉS DEL FIN ---
+  Wait 0.2
+
+  ' --- 4. CÓDIGO DE SALIDA: ES TODO EL CONTRATO CON EL IMPORTADOR ---
+  ' 0 APLICADO, CUALQUIER OTRA COSA NO APLICADO. EL DETALLE DE POR QUÉ
+  ' ESTÁ EN EL INFORME QUE QUEDÓ IMPRESO EN LA PESTAÑA
+  iCodigo = -1
+  Try iCodigo = hProceso.Value
+
+  Return (iCodigo = 0)
+
+End
+
+' ============================================
+' Función   : RecargarTrasImportar
+' Propósito : Reabre la base y repone la interfaz. Es el ÚNICO camino
+'             que reabre la conexión, por eso se invoca haya salido
+'             bien o mal la importación.
+' Parámetros: bAplicado As Boolean — si el importador devolvió 0
+' Retorna   : nada
+' ============================================
+Private Sub RecargarTrasImportar(bAplicado As Boolean)
+
+  ' --- 1. REAPERTURA ---
+  ' SIN BASE NO HAY APLICACIÓN: MISMO CRITERIO FAIL-FAST QUE Form_Open
+  If Not m_Base.Conectar() Then
+    ' m_Base YA INFORMÓ LA CAUSA CONCRETA
+    Me.Close
+    Return
+  Endif
+
+  ' --- 2. RECARGA DEL COMBO: EL SCRIPT PUDO AGREGAR UNA FAMILIA ---
+  ' NO ALCANZA CON REFRESCAR LA LISTA
+  CargarComboFiltros()
+  RefrescarLista(m_Corpus.FILTRO_TODAS)
+  LimpiarDetalle()
+
+  ' --- 3. EL HISTORIAL PUEDE APUNTAR A CÓDIGOS QUE YA NO EXISTEN ---
+  $aHistorial = New String[]
+  ActualizarBotones()
+
+  ' --- 4. VEREDICTO A LA VISTA ---
+  ' EL DETALLE ESTÁ EN LA PESTAÑA; ACÁ SOLO SI SE APLICÓ O NO
+  If bAplicado Then
+    lblAviso.Text = "importación aplicada"
+    tabDetalle.Index = 0
+  Else
+    lblAviso.Text = "importación no aplicada — ver la pestaña Terminal"
+  Endif
+
+End
+
+' ============================================
+' Función   : m_Sonido_Error
+' Propósito : Punto único del aviso sonoro de error. Existe para que el
+'             día que gbCorpus tenga módulo de sonido se cambie acá y no
+'             en siete lugares. Hoy no hace nada.
+'             NO se llama Log ni Error: Log es el logaritmo natural de
+'             Gambas y no puede usarse como nombre de Sub (GV-09).
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub m_Sonido_Error()
+
+  ' --- 1. SIN MÓDULO DE SONIDO EN ESTA APLICACIÓN ---
 
 End
 
@@ -801,6 +1160,13 @@ Public Sub hspPrincipal_Resize()
 
 End
 
+' ============================================
+' Función   : btnCerrar_Click
+' Propósito : Cierra el formulario. El guard de cambios sin guardar y
+'             la liberación de la conexión los hace Form_Close.
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
 Public Sub btnCerrar_Click()
 
   Me.Close
