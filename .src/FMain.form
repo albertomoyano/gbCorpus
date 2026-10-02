@@ -13,24 +13,30 @@
   Padding = 4
   { mnuCorpus Menu
     Text = ("Corpus")
-    { mnuExpDocumental Menu
-      Text = ("Exportar corpus completo (.md)")
+    { mnuImpSQL Menu
+      Text = ("Importar UPDATE SQL")
     }
-    { mnuExpOperativo Menu
-      Text = ("Exportar reglas vigentes (.md)")
+    { mnuSep1 Menu
     }
     { mnuExpVolcado Menu
       Text = ("Exportar volcado SQL")
     }
-    { mnuSep1 Menu
+    { mnuExpOperativo Menu
+      Text = ("Exportar reglas vigentes (.md)")
     }
-    { mnuImpSQL Menu
-      Text = ("Importar UPDATE SQL")
+    { mnuExpDocumental Menu
+      Text = ("Exportar corpus completo (.md)")
     }
     { mnuSep2 Menu
     }
     { mnuUbicacion Menu
       Text = ("Ubicación de la base")
+    }
+    { Menu1 Menu
+    }
+    { menuCerrarApp Menu
+      Text = ("Cerrar la aplicación")
+      Picture = Picture["iconos/salir.png"]
     }
   }
   { hspPrincipal Splitter
@@ -222,11 +228,6 @@
         }
         { Spring2 Spring
           Move(261,0,36,36)
-        }
-        { btnCerrar Button
-          Move(477,0,144,36)
-          Text = ("Cerrar")
-          Picture = Picture["iconos/salir.png"]
         }
       }
     }

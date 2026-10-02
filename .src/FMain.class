@@ -1160,14 +1160,7 @@ Public Sub hspPrincipal_Resize()
 
 End
 
-' ============================================
-' Función   : btnCerrar_Click
-' Propósito : Cierra el formulario. El guard de cambios sin guardar y
-'             la liberación de la conexión los hace Form_Close.
-' Parámetros: ninguno
-' Retorna   : nada
-' ============================================
-Public Sub btnCerrar_Click()
+Public Sub menuCerrarApp_Click()
 
   Me.Close
 
