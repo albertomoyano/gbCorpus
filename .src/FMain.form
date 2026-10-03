@@ -56,7 +56,7 @@
       }
       { lstEntradas ListBox
         Move(9,99,252,153)
-        Font = Font["Noto Mono"]
+        Font = Font["IBM Plex Mono"]
         Expand = True
       }
       { lblRelaciones Label
@@ -65,7 +65,7 @@
       }
       { lstRelaciones ListBox
         Move(9,315,252,162)
-        Font = Font["Noto Mono"]
+        Font = Font["IBM Plex Mono"]
         ToolTip = ("→ declaradas por esta entrada · ← entradas que la apuntan")
         Expand = True
       }
@@ -169,14 +169,15 @@
         Text = ("Texto")
         { txaCuerpo TextArea
           Move(9,27,261,81)
-          Font = Font["Noto Mono"]
+          Font = Font["IBM Plex Mono"]
           Expand = True
           Wrap = True
         }
         Index = 1
         Text = ("Terminal")
         { trmImportar TerminalView
-          Move(18,18,279,144)
+          Move(9,9,252,99)
+          Font = Font["IBM Plex Mono"]
         }
         Index = 0
       }
