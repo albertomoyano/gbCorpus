@@ -204,7 +204,7 @@
           Text = ("Pendiente:")
         }
         { txtPendiente TextArea
-          Move(189,0,108,90)
+          Move(189,9,108,90)
           Expand = True
           Wrap = True
           ScrollBar = Scroll.Vertical
