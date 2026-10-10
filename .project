@@ -1,6 +1,6 @@
 # Gambas Project File 3.0
 Startup=FMain
-Version=0.0.8
+Version=0.0.9
 Component=gb.db2
 Component=gb.image
 Component=gb.settings
