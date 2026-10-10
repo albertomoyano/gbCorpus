@@ -533,19 +533,18 @@ Private Function RutaImportador() As String
   Dim sRutaSistema As String
   Dim sRutaProyecto As String
 
-  ' --- 1. INSTALACIÓN DEL SISTEMA, QUE ES LA FUENTE DE VERDAD (SC-11) ---
+  ' --- 1. EJECUCIÓN DESDE EL IDE: EL IMPORTADOR DEL PROYECTO (SC-50) ---
+  ' VA PRIMERO: SI NO, CON EL PAQUETE INSTALADO EL IDE USARÍA EL DEL SISTEMA,
+  ' QUE PUEDE SER DE OTRA VERSIÓN. INSTALADO, Application.Path ES /usr/bin
+  ' Y ESTA RUTA NO EXISTE
+  sRutaProyecto = Application.Path &/ ".hidden" &/ RUTA_IMPORTADOR
+
+  If Exist(sRutaProyecto) Then Return sRutaProyecto
+
+  ' --- 2. INSTALACIÓN DEL SISTEMA ---
   sRutaSistema = CARPETA_SISTEMA &/ RUTA_IMPORTADOR
 
   If Exist(sRutaSistema) Then Return sRutaSistema
-
-  ' --- 2. EJECUCIÓN DESDE EL IDE ---
-  ' Application.Path NO PUEDE SER LA VÍA PRINCIPAL: DEVUELVE LA CARPETA DEL
-  ' PROYECTO EN DESARROLLO, PERO /usr/bin CON EL PAQUETE INSTALADO, QUE ES
-  ' DONDE VIVE EL EJECUTABLE .gambas. EL SÍNTOMA ES «no se encontró el
-  ' importador: /usr/bin/engine/...».
-  sRutaProyecto = Application.Path &/ RUTA_IMPORTADOR
-
-  If Exist(sRutaProyecto) Then Return sRutaProyecto
 
   ' --- 3. AUSENCIA: SE DICE CON LAS DOS RUTAS A LA VISTA ---
   ' UN "no se pudo importar" SIN LAS RUTAS OBLIGA A ADIVINAR DÓNDE MIRÓ
