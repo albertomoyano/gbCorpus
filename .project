@@ -1,6 +1,6 @@
 # Gambas Project File 3.0
 Startup=FMain
-Version=0.0.9
+Version=0.0.10
 Component=gb.db2
 Component=gb.image
 Component=gb.settings
@@ -19,8 +19,8 @@ Vendor=alberto moyano
 Address=alberto.alejandro.moyano@gmail.com
 Url=https://github.com/albertomoyano/gbtexpublisher
 License=General Public License
-PackageName=gbcorpus-0.0.9
-PackageLastVersion="0.0.9"
+PackageName=gbcorpus-0.0.10
+PackageLastVersion="0.0.10"
 Packager=1
 Systems=ubuntu
 SameDependencies=1
