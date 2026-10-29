@@ -95,6 +95,13 @@
           Foreground = &H0000FF
           ReadOnly = True
         }
+        { lblInformar Label
+          Move(351,0,207,36)
+          Background = Color.Background
+          Foreground = &H0000FF
+          Expand = True
+          Alignment = Align.Center
+        }
       }
       { hbxCabecera2 HBox
         Move(0,36,720,36)
