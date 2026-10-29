@@ -264,7 +264,8 @@ End
 
 ' ============================================
 ' Función   : ArmarVolcado
-' Propósito : Construye INSERT restaurables de familias y entradas.
+' Propósito : Construye INSERT restaurables de familias, entradas y el
+'             registro de importaciones (esquema 2).
 '             Se arma en Gambas y no con el CLI de sqlite3, que no está
 '             garantizado en una instalación mínima de Mint.
 ' Parámetros: ninguno
@@ -275,12 +276,14 @@ Private Function ArmarVolcado() As String
   Dim aSalida As New String[]
   Dim rFamilias As Result
   Dim rEntradas As Result
+  Dim rImportaciones As Result
 
   ' --- 1. ENCABEZADO ---
   aSalida.Add("-- Volcado del corpus normativo de gbpublisher")
   aSalida.Add("-- Restaurar sobre una base creada con el esquema vigente.")
   aSalida.Add("")
   aSalida.Add("BEGIN TRANSACTION;")
+  aSalida.Add("DELETE FROM importaciones;")
   aSalida.Add("DELETE FROM entradas;")
   aSalida.Add("DELETE FROM familias;")
   aSalida.Add("")
@@ -340,6 +343,32 @@ Private Function ArmarVolcado() As String
       Citar(rEntradas["fecha_alta"]) & ", " &
       Citar(rEntradas["fecha_modificacion"]) & ");")
     rEntradas.MoveNext
+  Wend
+
+  aSalida.Add("")
+
+  ' --- 4. REGISTRO DE IMPORTACIONES, EN ORDEN DE LLEGADA ---
+  ' SIN ÉL, UNA BASE RESTAURADA NO SABRÍA EN QUÉ act VA LA SERIE Y EL
+  ' IMPORTADOR ACEPTARÍA CUALQUIERA COMO PRIMERA. numero LLEGA YA ESCRITO
+  ' COMO LITERAL SQL DESDE LA CONSULTA: ASÍ UN NULL NO DEPENDE DE CÓMO LO
+  ' ENTREGUE EL DRIVER PARA UNA COLUMNA ENTERA
+  Try rImportaciones = m_Base.hConn.Exec(
+    "SELECT archivo, ifnull(CAST(numero AS TEXT), 'NULL') AS numero_sql, " &
+    "sha256, fecha, origen FROM importaciones ORDER BY id_importacion")
+  If Error Then
+    Message.Error("No se pudo leer el registro de importaciones." & Chr(10) & Error.Text)
+    Return ""
+  Endif
+
+  While rImportaciones.Available
+    ' SIN id_importacion: EL ORDEN DE LOS INSERT LO REPONE
+    aSalida.Add("INSERT INTO importaciones (archivo, numero, sha256, fecha, origen) VALUES (" &
+      Citar(rImportaciones["archivo"]) & ", " &
+      rImportaciones["numero_sql"] & ", " &
+      Citar(rImportaciones["sha256"]) & ", " &
+      Citar(rImportaciones["fecha"]) & ", " &
+      Citar(rImportaciones["origen"]) & ");")
+    rImportaciones.MoveNext
   Wend
 
   aSalida.Add("")

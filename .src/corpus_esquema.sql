@@ -1,6 +1,6 @@
 -- ============================================
 -- corpus.sqlite — REGISTRO NORMATIVO DE GBPUBLISHER
--- Esquema versión 1
+-- Esquema versión 2
 -- Creación manual:  sqlite3 corpus.sqlite < corpus_esquema.sql
 -- ============================================
 
@@ -46,7 +46,21 @@ CREATE TABLE esquema_version (
   fecha   TEXT    NOT NULL
 );
 
--- --- 4. SEMILLA ---
+-- --- 4. REGISTRO DE IMPORTACIONES (DESDE EL ESQUEMA 2) ---
+-- LO ESCRIBE SOLO EL IMPORTADOR: UNA FILA POR SCRIPT APLICADO. numero ES
+-- EL NN DE gbcorpus-act-NN.sql, O NULL PARA UN SCRIPT FUERA DE LA SERIE
+-- (UNIQUE ADMITE VARIOS NULL EN SQLITE)
+CREATE TABLE importaciones (
+  id_importacion INTEGER PRIMARY KEY,
+  archivo        TEXT    NOT NULL CHECK (archivo <> ''),
+  numero         INTEGER UNIQUE CHECK (numero > 0),
+  sha256         TEXT    CHECK (length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'),
+  fecha          TEXT    NOT NULL,
+  origen         TEXT    NOT NULL DEFAULT 'importador'
+                 CHECK (origen IN ('importador', 'retroactivo'))
+);
+
+-- --- 5. SEMILLA ---
 INSERT INTO familias (prefijo, nombre, descripcion, orden, ancho_numero, en_operativo) VALUES
   ('RC-GM', 'Reglas críticas Gambas',       'Comportamientos del lenguaje que obligan a un patrón determinado', 10, 2, 1),
   ('RC-XJ', 'Reglas críticas XSLT + JATS',  'Transformación y validación de XML de revistas',                   20, 2, 1),
@@ -55,4 +69,4 @@ INSERT INTO familias (prefijo, nombre, descripcion, orden, ancho_numero, en_oper
   ('SC',    'Soluciones canónicas',         'Decisiones cerradas: aplicar, no rediscutir',                       50, 2, 1),
   ('GV',    'Comportamientos verificados',  'Evidencia empírica de gambas-verificado.md',                        60, 2, 0);
 
-INSERT INTO esquema_version (version, fecha) VALUES (1, date('now'));
+INSERT INTO esquema_version (version, fecha) VALUES (2, date('now'));

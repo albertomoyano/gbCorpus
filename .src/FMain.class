@@ -41,8 +41,15 @@ Private $hImportacion As Process
 ' DEL SCRIPT Y CONTESTANDO EL PROMPT [s/N] EN EL TERMINAL
 Private Const SEGUNDOS_MAXIMOS As Float = 900.0
 
-' --- UBICACIÓN DEL IMPORTADOR DENTRO DEL PROYECTO ---
+' --- RECURSOS QUE VIAJAN CON EL PROGRAMA (RELATIVOS A .hidden O AL SISTEMA) ---
 Private Const RUTA_IMPORTADOR As String = "engine/importar_corpus.sh"
+' LA MIGRACIÓN DE UNA VERSIÓN A LA SIGUIENTE: esquema/esquema-v1-a-v2.sql
+Private Const CARPETA_ESQUEMA As String = "esquema"
+
+' --- MIGRACIÓN DE ARRANQUE, CON LA VENTANA YA A LA VISTA ---
+' EL IMPORTADOR PREGUNTA [s/N] EN EL TERMINAL: TIENE QUE ESTAR VISIBLE.
+' MISMO MECANISMO QUE gbShortcodes (SC-50)
+Private $hArranque As Timer
 
 ' CARPETA DE RECURSOS DEL SISTEMA. engine/ ES INFRAESTRUCTURA Y NO SE
 ' PERSONALIZA: VIAJA EN EL .deb JUNTO AL BINARIO Y NO SE COPIA A ~/.gbcorpus,
@@ -58,38 +65,135 @@ Private Const CARPETA_SISTEMA As String = "/usr/share/gbcorpus"
 ' ============================================
 Public Sub Form_Open()
 
-  ' --- 1. INFRAESTRUCTURA: SIN BASE NO HAY APLICACIÓN ---
-  If Not m_Base.Conectar() Then
-    ' m_Base YA INFORMÓ LA CAUSA CONCRETA
-    Quit
-  Endif
-
-  ' --- 2. GEOMETRÍA GUARDADA Y TÍTULO ---
+  ' --- 1. GEOMETRÍA GUARDADA Y TÍTULO ---
+  ' VAN ANTES DE LA BASE: SI HAY QUE MIGRAR, LA VENTANA SE MUESTRA IGUAL
   Settings.Read(Me)
-  Me.Text = "Corpus normativo — " & m_Base.RutaArchivoBase()
+  Me.Text = "Corpus normativo — esquema v" & CStr(m_Base.VERSION_ESQUEMA) &
+    " — " & m_Base.RutaArchivoBase()
 
-  ' --- 3. PROPORCIÓN DE LOS DOS PANELES ---
+  ' --- 2. PROPORCIÓN DE LOS DOS PANELES ---
   ' SE FIJA UNA SOLA VEZ. CALCULARLA EN UN HANDLER Resize LA RECOMPUTA
   ' EN CADA CUADRO DEL ARRASTRE, SIN NINGUNA GANANCIA
   hspPrincipal.Layout = [1, 2]
 
-  ' --- 4. LISTAS FIJAS DE LOS COMBOS DE METADATOS ---
-  CargarCombosFijos()
-
-  ' --- 5. FILTROS Y ENTRADAS ---
-  CargarComboFiltros()
-  RefrescarLista(m_Corpus.FILTRO_TODAS)
-
-  ' --- 6. ASPECTO DEL TERMINAL: EXPLÍCITO, NO HEREDADO ---
-  ' SI SE DEJA EN «FUENTE POR DEFECTO», QT SINTETIZA EL BOLD Y SE VE MAL
+  ' --- 3. ASPECTO DEL TERMINAL: EXPLÍCITO, NO HEREDADO ---
+  ' SI SE DEJA EN «FUENTE POR DEFECTO», QT SINTETIZA EL BOLD Y SE VE MAL.
+  ' VA ANTES DE LA BASE: UNA MIGRACIÓN DE ARRANQUE CORRE EN ESTE TERMINAL
   trmImportar.Font.Name = "IBM Plex Mono"
   trmImportar.Font.Size = 12
   trmImportar.Background = Color.RGB(45, 30, 20)      ' MARRÓN OSCURO
   trmImportar.Foreground = Color.RGB(230, 220, 210)
 
-  ' --- 7. ESTADO INICIAL DE CONTROLES ---
+  ' --- 4. LISTAS FIJAS DE LOS COMBOS DE METADATOS ---
+  ' NO TOCAN LA BASE: VAN ANTES, PARA QUE UNA MIGRACIÓN DE ARRANQUE, QUE
+  ' RECARGA POR RecargarTrasImportar, ENCUENTRE LOS COMBOS YA CARGADOS
+  CargarCombosFijos()
+
+  ' --- 5. INFRAESTRUCTURA: SIN BASE NO HAY APLICACIÓN ---
+  If Not m_Base.Conectar() Then
+    ' UNA VERSIÓN ATRÁS NO ES UN ERROR: SE OFRECE MIGRAR CUANDO LA VENTANA
+    ' YA ESTÉ A LA VISTA (SC-50). CUALQUIER OTRA FALLA, m_Base YA LA INFORMÓ
+    If m_Base.MigracionPendiente() Then
+      BloquearInterfaz(True)
+      lblAviso.Text = "la base está en el esquema v" & CStr(m_Base.VersionBase()) & ": migración pendiente"
+      lblInformar.Text = "sin registro de importaciones hasta migrar"
+      ProgramarMigracion()
+      Return
+    Endif
+    Quit
+    Return
+  Endif
+
+  ' --- 6. FILTROS Y ENTRADAS ---
+  CargarComboFiltros()
+  RefrescarLista(m_Corpus.FILTRO_TODAS)
+
+  ' --- 7. SEMÁFORO: EL ÚLTIMO SCRIPT QUE RECIBIÓ LA BASE ---
+  ' SE LEE ANTES DE PEDIR UN CAMBIO: SI NO ES LA ÚLTIMA act DE LA CARPETA,
+  ' FALTA APLICAR ALGO
+  lblInformar.Text = m_Base.UltimaImportacion()
+
+  ' --- 8. ESTADO INICIAL DE CONTROLES ---
   LimpiarDetalle()
   ActualizarBotones()
+
+End
+
+' ============================================
+' Función   : ProgramarMigracion
+' Propósito : Deja la migración para después de mostrar la ventana: el
+'             importador pregunta en el terminal, que tiene que estar a
+'             la vista
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub ProgramarMigracion()
+
+  $hArranque = New Timer As "tmrArranque"
+  $hArranque.Delay = 300
+  $hArranque.Enabled = True
+
+End
+
+' ============================================
+' Función   : tmrArranque_Timer
+' Propósito : Corre una sola vez la migración programada en el arranque
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Public Sub tmrArranque_Timer()
+
+  ' --- 1. UNA SOLA VEZ ---
+  $hArranque.Enabled = False
+  $hArranque = Null
+
+  ' --- 2. LA MIGRACIÓN ---
+  OfrecerMigracion()
+
+End
+
+' ============================================
+' Función   : OfrecerMigracion
+' Propósito : Migra la base, que está una versión atrás, con el importador y
+'             el script de migración de este mismo programa: desde el IDE,
+'             los del proyecto; instalado, los del paquete. Sin terminal
+'             externa ni ruta que elegir (SC-50)
+' Parámetros: ninguno
+' Retorna   : nada
+' ============================================
+Private Sub OfrecerMigracion()
+
+  Dim sImportador As String
+  Dim sMigracion As String
+  Dim iDesde As Integer
+  Dim bAplicado As Boolean
+
+  ' --- 1. LO QUE HACE FALTA, DE ESTE MISMO PROGRAMA ---
+  iDesde = m_Base.VersionBase()
+  sImportador = RutaRecurso(RUTA_IMPORTADOR)
+  If sImportador = "" Then
+    Me.Close
+    Return
+  Endif
+  sMigracion = RutaRecurso(CARPETA_ESQUEMA &/ "esquema-v" & CStr(iDesde) & "-a-v" & CStr(m_Base.VERSION_ESQUEMA) & ".sql")
+  If sMigracion = "" Then
+    Me.Close
+    Return
+  Endif
+
+  ' --- 2. CONFIRMACIÓN: SIN MIGRAR, ESTA VERSIÓN NO PUEDE ABRIR LA BASE ---
+  If Message.Question("La base está en el esquema v" & CStr(iDesde) &
+      " y esta versión del programa usa el v" & CStr(m_Base.VERSION_ESQUEMA) & "." & Chr(10) & Chr(10) &
+      "La migración guarda antes un respaldo de la base y, si algo falla, la deja como estaba." & Chr(10) &
+      "En la pestaña Terminal se confirma con s.",
+      "Migrar", "Salir") <> 1 Then
+    Me.Close
+    Return
+  Endif
+
+  ' --- 3. MIGRACIÓN Y REAPERTURA (RecargarTrasImportar CIERRA SI FALLA) ---
+  bAplicado = EjecutarImportacion(sImportador, sMigracion)
+  RecargarTrasImportar(bAplicado)
 
 End
 
@@ -503,7 +607,7 @@ Public Sub mnuImpSQL_Click()
   If Not ConfirmarDescartarCambios() Then Return
 
   ' --- 3. EL IMPORTADOR TIENE QUE ESTAR DONDE SE LO ESPERA ---
-  sImportador = RutaImportador()
+  sImportador = RutaRecurso(RUTA_IMPORTADOR)
   If sImportador = "" Then Return
 
   ' --- 4. ELECCIÓN DEL ARCHIVO ---
@@ -521,36 +625,37 @@ Public Sub mnuImpSQL_Click()
 End
 
 ' ============================================
-' Función   : RutaImportador
-' Propósito : Ubica el script importador y confirma que está. Busca primero en
-'             la instalación del sistema y después en la carpeta del proyecto,
-'             para que el mismo código sirva instalado y desde el IDE.
-' Parámetros: ninguno
+' Función   : RutaRecurso
+' Propósito : Ubica un recurso que viaja con el programa —el importador o una
+'             migración— y confirma que está: desde el IDE, el de .hidden del
+'             proyecto; instalado, el de /usr/share/gbcorpus. Así siempre se
+'             usan los de la versión que está corriendo (SC-50, SC-11).
+' Parámetros: sRelativo As String — ruta dentro de .hidden o del sistema
 ' Retorna   : String — ruta absoluta, o cadena vacía si no está
 ' ============================================
-Private Function RutaImportador() As String
+Private Function RutaRecurso(sRelativo As String) As String
 
   Dim sRutaSistema As String
   Dim sRutaProyecto As String
 
-  ' --- 1. EJECUCIÓN DESDE EL IDE: EL IMPORTADOR DEL PROYECTO (SC-50) ---
+  ' --- 1. EJECUCIÓN DESDE EL IDE: EL RECURSO DEL PROYECTO (SC-50) ---
   ' VA PRIMERO: SI NO, CON EL PAQUETE INSTALADO EL IDE USARÍA EL DEL SISTEMA,
   ' QUE PUEDE SER DE OTRA VERSIÓN. INSTALADO, Application.Path ES /usr/bin
   ' Y ESTA RUTA NO EXISTE
-  sRutaProyecto = Application.Path &/ ".hidden" &/ RUTA_IMPORTADOR
+  sRutaProyecto = Application.Path &/ ".hidden" &/ sRelativo
 
   If Exist(sRutaProyecto) Then Return sRutaProyecto
 
   ' --- 2. INSTALACIÓN DEL SISTEMA ---
-  sRutaSistema = CARPETA_SISTEMA &/ RUTA_IMPORTADOR
+  sRutaSistema = CARPETA_SISTEMA &/ sRelativo
 
   If Exist(sRutaSistema) Then Return sRutaSistema
 
   ' --- 3. AUSENCIA: SE DICE CON LAS DOS RUTAS A LA VISTA ---
   ' UN "no se pudo importar" SIN LAS RUTAS OBLIGA A ADIVINAR DÓNDE MIRÓ
   m_Sonido_Error()
-  Message.Error("No se encontró el importador. Se buscó en:" & Chr(10) & Chr(10) &
-    sRutaSistema & Chr(10) & sRutaProyecto)
+  Message.Error("No se encontró un archivo del programa. Se buscó en:" & Chr(10) & Chr(10) &
+    sRutaProyecto & Chr(10) & sRutaSistema)
 
   Return ""
 
@@ -744,8 +849,15 @@ End
 Private Sub RecargarTrasImportar(bAplicado As Boolean)
 
   ' --- 1. REAPERTURA ---
-  ' SIN BASE NO HAY APLICACIÓN: MISMO CRITERIO FAIL-FAST QUE Form_Open
+  ' SIN BASE NO HAY APLICACIÓN: MISMO CRITERIO FAIL-FAST QUE Form_Open.
+  ' UNA MIGRACIÓN QUE NO SE APLICÓ DEJA LA BASE COMO ESTABA: LA VENTANA
+  ' QUEDA ABIERTA Y BLOQUEADA PARA LEER EN EL TERMINAL QUÉ PASÓ
   If Not m_Base.Conectar() Then
+    If m_Base.MigracionPendiente() Then
+      BloquearInterfaz(True)
+      lblAviso.Text = "migración no aplicada — ver la pestaña Terminal; al cerrar y volver a abrir se ofrece de nuevo"
+      Return
+    Endif
     ' m_Base YA INFORMÓ LA CAUSA CONCRETA
     Me.Close
     Return
@@ -760,6 +872,10 @@ Private Sub RecargarTrasImportar(bAplicado As Boolean)
   ' --- 3. EL HISTORIAL PUEDE APUNTAR A CÓDIGOS QUE YA NO EXISTEN ---
   $aHistorial = New String[]
   ActualizarBotones()
+
+  ' --- 3b. SEMÁFORO: SE RELEE SIEMPRE, SE HAYA APLICADO O NO ---
+  ' SI NO SE APLICÓ, MUESTRA QUE EL REGISTRO NO SE MOVIÓ
+  lblInformar.Text = m_Base.UltimaImportacion()
 
   ' --- 4. VEREDICTO A LA VISTA ---
   ' EL DETALLE ESTÁ EN LA PESTAÑA; ACÁ SOLO SI SE APLICÓ O NO

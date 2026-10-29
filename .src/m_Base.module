@@ -6,11 +6,22 @@
 '             la abre, activa las claves foráneas y verifica la versión
 '             del esquema antes de que cualquier otro módulo la use.
 '             La base vive en ~/.gbcorpus/corpus.sqlite
+'             Desde el esquema 2 sigue el mismo modelo de migración que
+'             el m_Base de gbShortcodes (SC-50).
 ' ============================================
 
 Public hConn As Connection
 
-Public Const VERSION_ESQUEMA As Integer = 1
+' ESQUEMA 2: AGREGA LA TABLA importaciones, EL REGISTRO DE LOS SCRIPTS
+' APLICADOS (RF-08)
+Public Const VERSION_ESQUEMA As Integer = 2
+
+' --- ESTADO DE LA ÚLTIMA VERIFICACIÓN DE ESQUEMA ---
+' UNA BASE UNA VERSIÓN ATRÁS NO ES UN ERROR: FMain OFRECE MIGRARLA CON EL
+' IMPORTADOR Y EL SCRIPT QUE VIAJAN CON ESTE MISMO PROGRAMA (SC-50)
+Private $bMigracionPendiente As Boolean
+Private $iVersionBase As Integer
+
 Public Const NOMBRE_BASE As String = "corpus.sqlite"
 Public Const TIPO_DRIVER As String = "sqlite3"
 
@@ -127,8 +138,19 @@ Public Function VerificarEsquema() As Boolean
   Endif
 
   iVersion = rVersion["version"]
+  $iVersionBase = iVersion
 
-  ' --- 3. COMPARACIÓN CONTRA LA VERSIÓN QUE ESTE BINARIO MANEJA ---
+  ' --- 3. UNA VERSIÓN ATRÁS: MIGRACIÓN PENDIENTE, SIN MENSAJE ---
+  ' FMain LA OFRECE Y LA CORRE CON EL IMPORTADOR Y EL SCRIPT DE ESTE MISMO
+  ' PROGRAMA. SE CIERRA LA CONEXIÓN: sqlite3 NECESITA EL LOCK DE ESCRITURA
+  If iVersion = VERSION_ESQUEMA - 1 Then
+    $bMigracionPendiente = True
+    Cerrar()
+    Return False
+  Endif
+  $bMigracionPendiente = False
+
+  ' --- 4. COMPARACIÓN CONTRA LA VERSIÓN QUE ESTE BINARIO MANEJA ---
   If iVersion <> VERSION_ESQUEMA Then
     Message.Error("Versión de esquema incompatible." & Chr(10) &
       "La base es v" & CStr(iVersion) &
@@ -137,6 +159,68 @@ Public Function VerificarEsquema() As Boolean
   Endif
 
   Return True
+
+End
+
+' ============================================
+' Función   : MigracionPendiente
+' Propósito : Dice si la última conexión encontró la base una versión atrás
+' Parámetros: ninguno
+' Retorna   : Boolean — True si hay que migrar antes de abrir
+' ============================================
+Public Function MigracionPendiente() As Boolean
+
+  Return $bMigracionPendiente
+
+End
+
+' ============================================
+' Función   : VersionBase
+' Propósito : La versión de esquema que la última conexión leyó en la base
+' Parámetros: ninguno
+' Retorna   : Integer — la versión; 0 si todavía no se leyó
+' ============================================
+Public Function VersionBase() As Integer
+
+  Return $iVersionBase
+
+End
+
+' ============================================
+' Función   : UltimaImportacion
+' Propósito : Arma el texto del semáforo de la cabecera: el último script
+'             que el importador aplicó y, si ese no es de la serie
+'             gbcorpus-act-NN, también la última act de la serie. Es lo
+'             que permite ver, antes de pedir un cambio, si la base tiene
+'             todas las act que la carpeta dice tener.
+' Parámetros: ninguno
+' Retorna   : String — texto listo para mostrar; nunca vacío
+' ============================================
+Public Function UltimaImportacion() As String
+
+  Dim rUltima As Result
+
+  ' --- 1. SIN CONEXIÓN NO HAY REGISTRO QUE LEER ---
+  If IsNull(hConn) Then Return "sin base abierta"
+
+  ' --- 2. LA ÚLTIMA IMPORTACIÓN, POR ORDEN DE LLEGADA ---
+  ' EL TEXTO ENTERO SE ARMA EN SQL Y LLEGA COMO UNA SOLA COLUMNA DE TEXTO:
+  ' ASÍ numero NULL NUNCA LLEGA A GAMBAS Y NO HAY QUE SUPONER CÓMO ENTREGA
+  ' EL DRIVER UN NULL O UN BOOLEANO. SI LA ÚLTIMA NO ES DE LA SERIE (UNA
+  ' MIGRACIÓN, UN SCRIPT SUELTO) SE AGREGA EN QUÉ act VA LA SERIE; SIN
+  ' NINGUNA act, MAX DA NULL, LA CONCATENACIÓN DA NULL E ifnull LA ANULA
+  Try rUltima = hConn.Exec("SELECT 'última importación: ' || " &
+    "CASE WHEN numero IS NULL THEN archivo ELSE 'act-' || numero END || " &
+    "' · ' || substr(fecha, 1, 16) || " &
+    "CASE WHEN numero IS NULL THEN ifnull(' — serie en act-' || " &
+    "(SELECT MAX(numero) FROM importaciones), '') ELSE '' END AS texto " &
+    "FROM importaciones ORDER BY id_importacion DESC LIMIT 1")
+  If Error Then Return "registro de importaciones ilegible"
+
+  ' --- 3. REGISTRO VACÍO: UNA BASE NUEVA, QUE NO RECIBIÓ NINGÚN SCRIPT ---
+  If Not rUltima.Available Then Return "sin importaciones registradas"
+
+  Return rUltima["texto"]
 
 End
 
@@ -265,6 +349,18 @@ Private Function SentenciasDDL() As String[]
 
   ' --- 4. VERSIÓN DE ESQUEMA ---
   aDDL.Add("CREATE TABLE esquema_version (version INTEGER NOT NULL, fecha TEXT NOT NULL)")
+
+  ' --- 4b. REGISTRO DE IMPORTACIONES (ESQUEMA 2, RF-08) ---
+  ' LO ESCRIBE SOLO EL IMPORTADOR. EN UNA BASE NUEVA NACE VACÍO: LA PRIMERA
+  ' act QUE LLEGUE SE ACEPTA COMO COMIENZO DE LA SERIE
+  aDDL.Add("CREATE TABLE importaciones (" &
+    "id_importacion INTEGER PRIMARY KEY, " &
+    "archivo TEXT NOT NULL CHECK (archivo <> ''), " &
+    "numero INTEGER UNIQUE CHECK (numero > 0), " &
+    "sha256 TEXT CHECK (length(sha256) = 64 AND sha256 NOT GLOB '*[^0-9a-f]*'), " &
+    "fecha TEXT NOT NULL, " &
+    "origen TEXT NOT NULL DEFAULT 'importador' " &
+    "CHECK (origen IN ('importador', 'retroactivo')))")
 
   ' --- 5. SEMILLA DE FAMILIAS ---
   aDDL.Add("INSERT INTO familias VALUES ('RC-GM','Reglas críticas Gambas'," &

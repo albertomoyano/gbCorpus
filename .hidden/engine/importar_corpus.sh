@@ -11,6 +11,10 @@
 #             Corre igual en el TerminalView embebido de gbCorpus o en
 #             una terminal cualquiera: no hace nada que dependa de una.
 #
+#             Desde el esquema 2 registra cada script aplicado en la
+#             tabla importaciones y vigila la serie gbcorpus-act-NN: un
+#             número salteado o repetido se detiene antes de escribir.
+#
 # Uso       : importar_corpus.sh ARCHIVO.sql [RUTA_BASE]
 #             Sin RUTA_BASE usa ~/.gbcorpus/corpus.sqlite
 #
@@ -26,10 +30,20 @@ SCRIPT_SQL="${1:-}"
 BASE="${2:-$HOME/.gbcorpus/corpus.sqlite}"
 CARPETA_BASE="$(dirname "$BASE")"
 CARPETA_RESPALDOS="$CARPETA_BASE/respaldos"
-SELLO="$(date +%Y%m%d-%H%M%S)"
+# EL PID EVITA QUE DOS CORRIDAS EN EL MISMO SEGUNDO SE PISEN EL RESPALDO
+SELLO="$(date +%Y%m%d-%H%M%S)-$$"
 
 # Versión de esquema que este corpus maneja. Si algún día sube, sube acá.
-ESQUEMA_ESPERADO=1
+ESQUEMA_ESPERADO=2
+
+# La serie de los scripts de datos: gbcorpus-act-NN.sql (SC-50). Un
+# archivo con otro nombre se aplica igual y se registra sin número.
+PATRON_SERIE='^gbcorpus-act-([0-9]+)\.sql$'
+
+# La palabra que hay que escribir para aplicar un script fuera de orden.
+# Es una palabra y no una «s»: el [s/N] de la confirmación se contesta
+# por costumbre, y esto tiene que leerse antes de contestarlo.
+PALABRA_SALTO="saltar"
 
 # Cuántos respaldos se conservan antes de empezar a borrar los viejos.
 RESPALDOS_A_CONSERVAR=20
@@ -111,32 +125,147 @@ if [ "$INTEGRIDAD" != "ok" ]; then
 fi
 ok "Integridad de la base: correcta"
 
-# --- Versión de esquema: la de la base contra la que este script maneja ---
+# --- Versión de esquema ---
+# Un script común se escribe para la versión que maneja este importador.
+# Una migración lo declara en su cabecera («-- Migración: 1 a 2») y es lo
+# único que se acepta sobre una base de la versión anterior. Es el mismo
+# mecanismo que importar_shortcodes.sh (SC-50).
 ESQUEMA_BASE="$(consultar 'SELECT MAX(version) FROM esquema_version;')"
 if [ -z "$ESQUEMA_BASE" ]; then
   falla "No se pudo leer esquema_version: puede no ser una base de corpus"
   terminar "ERROR" "sin esquema_version"
 fi
 
-if [ "$ESQUEMA_BASE" != "$ESQUEMA_ESPERADO" ]; then
-  falla "La base está en esquema v$ESQUEMA_BASE y este script maneja v$ESQUEMA_ESPERADO"
-  terminar "ERROR" "esquema incompatible"
-fi
-ok "Esquema de la base: v$ESQUEMA_BASE"
+MIGRACION="$(grep -iEm1 '^[[:space:]]*--[[:space:]]*migraci(o|ó)n[[:space:]]*:' "$SCRIPT_SQL" \
+  | grep -oE '[0-9]+' | tr '\n' ' ')"
+MIGRA_DE="$(echo "$MIGRACION" | cut -d' ' -f1)"
+MIGRA_A="$(echo "$MIGRACION" | cut -d' ' -f2)"
 
-# --- Versión declarada en la cabecera del .sql, si la declara ---
-# Se acepta "-- Esquema: version 1", "-- esquema: 1" y variantes.
-ESQUEMA_DECLARADO="$(grep -iEm1 '^[[:space:]]*--[[:space:]]*esquema' "$SCRIPT_SQL" \
-  | grep -oE '[0-9]+' | head -n1)"
+if [ -n "$MIGRA_DE" ]; then
 
-if [ -z "$ESQUEMA_DECLARADO" ]; then
-  aviso "El script no declara versión de esquema en su cabecera"
-elif [ "$ESQUEMA_DECLARADO" != "$ESQUEMA_BASE" ]; then
-  falla "El script fue escrito para v$ESQUEMA_DECLARADO y la base está en v$ESQUEMA_BASE"
-  terminar "ERROR" "el script no corresponde a esta base"
+  if [ -z "$MIGRA_A" ]; then
+    falla "La cabecera de migración no dice a qué versión lleva («-- Migración: 1 a 2»)"
+    terminar "ERROR" "migración mal declarada"
+  fi
+  if [ "$MIGRA_A" != "$ESQUEMA_ESPERADO" ]; then
+    falla "La migración lleva a v$MIGRA_A y este importador maneja v$ESQUEMA_ESPERADO"
+    terminar "ERROR" "migración para otra versión"
+  fi
+  if [ "$ESQUEMA_BASE" != "$MIGRA_DE" ]; then
+    falla "La migración parte de v$MIGRA_DE y la base está en v$ESQUEMA_BASE"
+    terminar "ERROR" "la base no está en la versión de partida"
+  fi
+  ok "Migración de esquema: v$MIGRA_DE → v$MIGRA_A (la base está en v$ESQUEMA_BASE)"
+
 else
-  ok "El script declara v$ESQUEMA_DECLARADO: coincide"
+
+  if [ "$ESQUEMA_BASE" != "$ESQUEMA_ESPERADO" ]; then
+    falla "La base está en esquema v$ESQUEMA_BASE y este script maneja v$ESQUEMA_ESPERADO"
+    if [ "$ESQUEMA_BASE" -lt "$ESQUEMA_ESPERADO" ] 2>/dev/null; then
+      echo "      Primero hay que aplicar la migración a v$ESQUEMA_ESPERADO."
+    fi
+    terminar "ERROR" "esquema incompatible"
+  fi
+  ok "Esquema de la base: v$ESQUEMA_BASE"
+
+  # --- Versión declarada en la cabecera del .sql, si la declara ---
+  # Se acepta "-- Esquema: version 2", "-- esquema: 2" y variantes.
+  ESQUEMA_DECLARADO="$(grep -iEm1 '^[[:space:]]*--[[:space:]]*esquema' "$SCRIPT_SQL" \
+    | grep -oE '[0-9]+' | head -n1)"
+
+  if [ -z "$ESQUEMA_DECLARADO" ]; then
+    aviso "El script no declara versión de esquema en su cabecera"
+  elif [ "$ESQUEMA_DECLARADO" != "$ESQUEMA_BASE" ]; then
+    falla "El script fue escrito para v$ESQUEMA_DECLARADO y la base está en v$ESQUEMA_BASE"
+    terminar "ERROR" "el script no corresponde a esta base"
+  else
+    ok "El script declara v$ESQUEMA_DECLARADO: coincide"
+  fi
+
 fi
+
+# ============================================================
+# 3b. SERIE DE ACTUALIZACIONES Y HUELLA DEL ARCHIVO
+# ============================================================
+
+titulo "Serie de actualizaciones"
+
+if ! command -v sha256sum >/dev/null 2>&1; then
+  falla "sha256sum no está instalado (paquete coreutils)"
+  terminar "ERROR" "falta el binario sha256sum"
+fi
+
+ARCHIVO="$(basename "$SCRIPT_SQL")"
+HUELLA_ARCHIVO="$(sha256sum "$SCRIPT_SQL" | cut -d' ' -f1)"
+
+# El número sale del nombre. 08 y 8 son el mismo número: 10# evita que
+# bash lea un cero inicial como octal.
+NUMERO=""
+if [[ "$ARCHIVO" =~ $PATRON_SERIE ]]; then
+  NUMERO=$((10#${BASH_REMATCH[1]}))
+fi
+
+if [ -n "$MIGRA_DE" ]; then
+  # LA TABLA importaciones NACE EN LA MIGRACIÓN A v2: ANTES NO HAY SERIE
+  # QUE CONTROLAR. LA MIGRACIÓN SE REGISTRA IGUAL AL TERMINAR, SIN NÚMERO
+  ok "Migración: fuera de la serie, se registra sin número"
+  NUMERO=""
+else
+  ULTIMO="$(consultar 'SELECT MAX(numero) FROM importaciones;')"
+  ULTIMO_ARCHIVO="$(consultar 'SELECT archivo || '"' · '"' || fecha FROM importaciones ORDER BY id_importacion DESC LIMIT 1;')"
+  printf '  Última importación registrada: %s\n' "${ULTIMO_ARCHIVO:-ninguna}"
+
+  # --- Un archivo idéntico ya aplicado, con este nombre o con otro ---
+  YA_APLICADO="$(consultar "SELECT archivo || ' el ' || fecha FROM importaciones WHERE sha256 = '$HUELLA_ARCHIVO' LIMIT 1;")"
+  if [ -n "$YA_APLICADO" ]; then
+    falla "Este mismo archivo ya se aplicó: $YA_APLICADO"
+    terminar "ERROR" "script ya aplicado"
+  fi
+
+  if [ -z "$NUMERO" ]; then
+    aviso "«$ARCHIVO» no sigue la serie gbcorpus-act-NN: se registra sin número"
+  else
+    # --- El número ya está registrado: otro archivo con el mismo número ---
+    REGISTRADO="$(consultar "SELECT archivo || ' el ' || fecha FROM importaciones WHERE numero = $NUMERO;")"
+    if [ -n "$REGISTRADO" ]; then
+      falla "act-$NUMERO ya está registrada: $REGISTRADO"
+      echo "      El contenido es distinto del aplicado. Si es una corrección,"
+      echo "      va como un script nuevo con el número siguiente."
+      terminar "ERROR" "número de la serie ya usado"
+    fi
+
+    ESPERADO=$(( ${ULTIMO:-0} + 1 ))
+    if [ -z "$ULTIMO" ]; then
+      aviso "No hay ninguna act registrada: se acepta act-$NUMERO como primera"
+    elif [ "$NUMERO" -eq "$ESPERADO" ]; then
+      ok "act-$NUMERO sigue a act-$ULTIMO"
+    else
+      # --- Fuera de orden: es el caso que esta sección existe para frenar ---
+      if [ "$NUMERO" -gt "$ESPERADO" ]; then
+        falla "Se esperaba act-$ESPERADO y este script es act-$NUMERO"
+        echo "      Faltan en el registro: act-$ESPERADO a act-$((NUMERO - 1))."
+        echo "      Lo habitual es que falte aplicar una de ellas: se aplican"
+        echo "      primero y en orden."
+      else
+        falla "act-$NUMERO es anterior a la última registrada, act-$ULTIMO"
+        echo "      Puede ser una que quedó sin aplicar. Los scripts posteriores"
+        echo "      se escribieron contra una base que ya la tenía."
+      fi
+
+      # SIN TERMINAL NO HAY A QUIÉN PREGUNTAR: SE DETIENE
+      if [ ! -t 0 ]; then
+        terminar "ERROR" "fuera de la serie"
+      fi
+      printf '\n  Para aplicarlo igual, escribir «%s»; cualquier otra cosa cancela: ' "$PALABRA_SALTO"
+      read -r RESPUESTA_SALTO
+      if [ "$RESPUESTA_SALTO" != "$PALABRA_SALTO" ]; then
+        terminar "ERROR" "fuera de la serie, cancelado"
+      fi
+      aviso "Se aplica fuera de orden por decisión explícita"
+    fi
+  fi
+fi
+ok "Huella sha256: $HUELLA_ARCHIVO"
 
 # ============================================================
 # 4. CABECERA DEL SCRIPT Y CONFIRMACIÓN
@@ -229,12 +358,24 @@ MOMENTO="$(consultar "SELECT datetime('now','localtime');")"
 # Los envoltorios van en bloques if y no en "[ ... ] && echo": un && que
 # no se ejecuta devuelve 1, y si es el último comando del grupo, con
 # pipefail la tubería entera reporta un fallo que nunca ocurrió.
+#
+# EL REGISTRO va en la misma sesión, después del script: con .bail on,
+# si el script falla sqlite3 sale antes de llegar acá y no se registra
+# nada. Cuando el importador envuelve la transacción, el registro entra
+# dentro de ella. Cuando el script trae la suya (SC-50), va después de su
+# COMMIT, porque SQLite no anida transacciones: la sección 7 comprueba
+# que la fila haya entrado.
+ARCHIVO_SQL="${ARCHIVO//\'/\'\'}"
+if [ -n "$NUMERO" ]; then NUMERO_SQL="$NUMERO"; else NUMERO_SQL="NULL"; fi
+REGISTRO="INSERT INTO importaciones (archivo, numero, sha256, fecha, origen) VALUES ('$ARCHIVO_SQL', $NUMERO_SQL, '$HUELLA_ARCHIVO', datetime('now','localtime'), 'importador');"
 {
   echo "PRAGMA foreign_keys = ON;"
   echo ".bail on"
   echo ".changes on"
   if [ -n "$ABRE" ]; then echo "$ABRE"; fi
   cat "$SCRIPT_SQL"
+  echo ""
+  echo "$REGISTRO"
   if [ -n "$CIERRA" ]; then echo "$CIERRA"; fi
 } | sqlite3 -batch "$BASE" > "$SALIDA_SQL" 2>&1
 
@@ -280,6 +421,30 @@ fi
 
 rm -f "$SALIDA_SQL"
 ok "Sentencias aplicadas sin error"
+
+# Una migración que dice haber terminado se comprueba: la versión de la
+# base tiene que ser la de destino (SC-13: el informe no afirma lo que
+# no verificó)
+if [ -n "$MIGRA_DE" ]; then
+  ESQUEMA_DESPUES="$(consultar 'SELECT MAX(version) FROM esquema_version;')"
+  if [ "$ESQUEMA_DESPUES" = "$MIGRA_A" ]; then
+    ok "La base quedó en el esquema v$ESQUEMA_DESPUES"
+  else
+    falla "La base quedó en v${ESQUEMA_DESPUES:-?} y la migración debía llevarla a v$MIGRA_A"
+    terminar "ERROR" "migración incompleta: restaurar el respaldo"
+  fi
+fi
+
+# El registro se comprueba igual: es lo que gbCorpus muestra como última
+# importación y lo que la próxima corrida usa para controlar la serie
+REGISTRADA="$(consultar "SELECT CASE WHEN numero IS NULL THEN archivo ELSE 'act-' || numero END || ' · ' || fecha FROM importaciones WHERE sha256 = '$HUELLA_ARCHIVO' ORDER BY id_importacion DESC LIMIT 1;")"
+if [ -n "$REGISTRADA" ]; then
+  ok "Registrada: $REGISTRADA"
+else
+  falla "El script se aplicó pero no quedó registrado en importaciones"
+  echo "      La próxima act va a figurar fuera de la serie: el registro"
+  echo "      que falta se agrega con un script, como cualquier cambio."
+fi
 
 # ============================================================
 # 7. VERIFICACIONES POSTERIORES
@@ -371,6 +536,10 @@ SELECT '  ' || codigo || '  ' || substr(titulo, 1, 62)
 
 if [ -n "$TOCADAS" ]; then
   echo "$TOCADAS"
+elif [ -n "$MIGRA_DE" ]; then
+  # UNA MIGRACIÓN CAMBIA LA ESTRUCTURA, NO EL TEXTO DE LAS ENTRADAS: QUE
+  # NO HAYA NINGUNA ESCRITA ES LO ESPERADO, NO UN SÍNTOMA DE FECHA SIN HORA
+  ok "La migración no escribió entradas"
 else
   # Un script que escribe date('now') deja solo la fecha, sin hora, y
   # queda por debajo del sello. No es un error: es que ese script no
